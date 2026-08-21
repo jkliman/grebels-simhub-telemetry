@@ -4,12 +4,15 @@ Motion telemetry for [G-Rebels](https://store.steampowered.com/app/2445980/GRebe
 so a motion platform can follow your craft.
 
 The game has no telemetry output. Its FAQ says a UDP port for motion simulators
-is *planned* for Early Access, but it isn't there yet. This reads the craft's
-transform out of the running game and streams it to SimHub in a format SimHub
-already understands.
+is *planned* for Early Access, but it isn't there yet. This reads the craft out
+of the running game and streams it to SimHub — motion, attitude and speed, plus
+weapons, heat, shields and boost.
 
-> **Beta.** Working and validated against recorded flight data, but tested on
-> one machine and one game build so far. Please open an issue if it misbehaves.
+G-Rebels appears in SimHub under **its own name and icon**, not disguised as a
+racing game.
+
+> **Beta.** Validated against live flight on one machine and one game build.
+> Please open an issue if it misbehaves.
 
 ---
 
@@ -25,9 +28,10 @@ already understands.
    [Releases](../../releases) and run it. No installer, no admin rights.
 2. It should find your G-Rebels folder automatically. Press **Install / repair**.
    That fetches UE4SS, applies the UE 5.8 compatibility files, and drops in the
-   telemetry mod.
-3. In **SimHub**, choose **DiRT Rally 2.0** and set the UDP port to **20777**.
-   The real DiRT Rally 2.0 does not need to be installed — SimHub just listens.
+   telemetry mod, and installs the SimHub definition if SimHub is on this PC.
+3. **Restart SimHub**, then pick **G Rebels** in its games list. If SimHub is on
+   this same PC the definition was installed for you in step 2; for a separate
+   rig see [below](#if-simhub-is-on-a-different-machine).
 4. Start G-Rebels and load into a flight.
 5. Back in the app, enter your SimHub machine's IP (or leave `127.0.0.1` if it's
    the same PC) and press **Start streaming**.
@@ -38,15 +42,29 @@ that it's live while the game is fullscreen.
 
 ### If SimHub is on a different machine
 
-Allow the packets through the firewall **on the SimHub machine**:
+SimHub reads its game definitions from its **own** disk, so two files have to
+travel. Copy both of these from this PC:
+
+```
+%LocalAppData%\SimHub\ExternalSims\Definitions\G Rebels.simdef
+%LocalAppData%\SimHub\ExternalSims\Definitions\icon.png
+```
+
+into the identical folder on the rig, then restart SimHub. They must stay
+together — `IconPath` inside the definition is relative. Nothing else transfers.
+
+Then allow the packets through the firewall **on the SimHub machine**:
 
 ```powershell
-New-NetFirewallRule -DisplayName "SimHub telemetry UDP 20777" `
-  -Direction Inbound -Protocol UDP -LocalPort 20777 -Action Allow -Profile Private
+New-NetFirewallRule -DisplayName "G-Rebels telemetry" `
+  -Direction Inbound -Protocol UDP -LocalPort 30777 -Action Allow -Profile Private
 ```
 
 If Windows has your LAN marked as Public, use `-Profile Any`. A blocked port is
 the most common reason for "everything looks fine but nothing moves".
+
+Automatic game detection won't work in this setup — SimHub can't see a process
+on another machine — so select G Rebels by hand. Everything else is unaffected.
 
 ---
 
@@ -56,11 +74,13 @@ the most common reason for "everything looks fine but nothing moves".
    GAME PC                                        SIMHUB / RIG
    ┌────────────────────────────────┐             ┌────────────────────┐
    │ G-Rebels                       │             │ SimHub             │
-   │   └ UE4SS ─ GRTelemetry mod    │  UDP 20777  │   └ Motion plugin  │
-   │        (publishes addresses)   │ ──────────► │                    │
-   │ GRebelsTelemetry.exe           │             │                    │
-   │   reads memory, sends packets  │             │                    │
-   └────────────────────────────────┘             └────────────────────┘
+   │   └ UE4SS ─ GRTelemetry mod    │  UDP 30777  │   ├ Motion plugin  │
+   │        publishes addresses     │ ──────────► │   ├ ShakeIt        │
+   │        + property offsets      │   (native)  │   └ AZOM ─► AB9    │
+   │                                │             │                    │
+   │ GRebelsTelemetry.exe           │  UDP 20777  │  G Rebels appears  │
+   │   reads memory, sends packets  │ ──────────► │  as its own game   │
+   └────────────────────────────────┘  (DR2 compat)└───────────────────┘
 ```
 
 The in-game mod does almost nothing: a few times a second it writes out the
@@ -82,11 +102,54 @@ correlation between distance travelled and measured interval is 0.04, i.e.
 none. Dividing good distances by bad intervals produced double-digit phantom G
 in early versions.
 
-Telemetry goes out as Codemasters `extradata=3` packets — 264 bytes, 66 floats —
-which carry position, velocity and a full orientation basis. That's enough for a
-flight model, and it means zero configuration on the SimHub side. It's the same
-approach [SpaceMonkey](https://github.com/PHARTGAMES/SpaceMonkey) uses to bolt
-unsupported games onto motion software.
+### Two output formats
+
+**Native (default, UDP 30777).** SimHub's External Sim integration: a `.simdef`
+definition declaring exactly what the game provides, and a 211-byte binary
+packet. Seven fields are SimHub *standard* fields — pitch, yaw, roll, speed and
+the three body-frame accelerations — which is what makes the Motion plugin work
+at all; custom fields are exposed as properties but never reach SimHub's
+internal telemetry model. The rest carry weapons, heat, shields, boost and the
+synthetic engine channels.
+
+Those standard fields come with conventions that differ from Unreal's, and
+every mismatch fails *silently* — the platform still moves, just wrongly:
+
+| SimHub wants | Unreal gives | Applied |
+|---|---|---|
+| `PitchDegrees` positive nose-**down** | nose-up | negated |
+| `SpeedKmh` in km/h | m/s | ×3.6 |
+| `Local*Ms2` in m/s² | derived in g | ×9.80665 |
+| heave **excluding** gravity | — | none needed |
+
+Heave needs no correction because velocity is differentiated kinematically, so
+there is no accelerometer +g reaction term to remove.
+
+**Compatibility (UDP 20777).** Codemasters `extradata=3` — 264 bytes, 66 floats
+— carrying position, velocity and a full orientation basis. Useful for motion
+software that isn't SimHub, and as a fallback. Set `output_mode` to `dr2`,
+`simdef` or `both` in settings. It's the approach
+[SpaceMonkey](https://github.com/PHARTGAMES/SpaceMonkey) established for
+bolting unsupported games onto motion software.
+
+### Beyond motion
+
+The mod resolves gameplay properties **by name** through Unreal's reflection
+system and publishes their offsets, so a game patch that moves them costs a
+re-scan rather than silently reading garbage. The bridge reads the whole ~5 KB
+span in a single `ReadProcessMemory`, which also guarantees the values share one
+instant instead of smearing across the sampling window.
+
+That gives shields, health, boost, missiles, landing gear — and firing.
+
+**Shots come from the alternating-barrel flag, not an ammo count.** The primary
+gun turns out to be heat-limited: `PrimaryFireMagazineStatus` reads 0 throughout
+flight while the guns are plainly firing, and what the pilot experiences as
+"magazine emptied" is the overheat cutout. `ShootLeft` flips once per shot as
+the barrels alternate, which is an exact per-shot event — and it tells you
+*which* barrel, so shakers can fire in stereo. Each shot also feeds a decaying
+`fire_impulse` envelope, so an effect can bind strength directly instead of
+doing edge detection in SimHub.
 
 ### Running UE4SS on Unreal Engine 5.8
 
@@ -108,15 +171,48 @@ Full details in [docs/BUILD-NOTES.md](docs/BUILD-NOTES.md).
 
 ---
 
+## Force feedback: MOZA AB9 via AZOM
+
+If you have a MOZA AB9 and the [AZOM](https://github.com/giantorth/AZOM) plugin,
+the stick can be driven from this telemetry — but only through car-shaped
+inputs. AZOM sets the AB9's vibration period from `rpm / maxRpm` and fires its
+kick on gear-*string* transitions.
+
+G-Rebels has neither an engine nor a gearbox, so those channels are synthesised:
+RPM leans mostly on airspeed with a boost contribution, so the buzz rises as you
+accelerate and jumps when the booster lights. The denominator prefers the game's
+own `CurrentMaxVelocity` (700 km/h), range-checked because it arrives in Unreal
+centimetres and is occasionally zero.
+
+Gear is pinned to neutral by default. AZOM kicks the stick on **every** gear
+change, so a synthetic gear derived from speed would thump you each time you
+accelerated through a band. Set `synth_gear` to `true` if that appeals.
+
+Set `synth_engine` to `false` to send nothing at all on those channels.
+
+---
+
 ## Known limitations
 
-**G-forces are derived, not read.** The game exposes no velocity field, so
-acceleration is fitted from position. The default 0.30 s fit window recovers the
-true mean to within 3% of a long-window reference; shortening it makes the
-platform buzz, lengthening it adds cue latency. Tune `fit_window_s` in
-`%APPDATA%\GRebelsTelemetry\settings.json` if your platform prefers otherwise,
-or turn **Send G-forces** off entirely — position and orientation are
-unaffected, so tilt cueing still works.
+**G-forces are derived, not read.** `GetVelocity()` is computed rather than
+stored — a 16 KB scan of both the pawn and its root component, in float and
+double layouts, found nothing — so acceleration is fitted from position alone.
+Differentiating twice squares the jitter, and roughly 10% of frames still reach
+the 6 g clamp during fast flight. The clamp count is shown in the window rather
+than hidden.
+
+The default 0.30 s fit window recovers the true mean to within 3% of a
+long-window reference; shortening it makes the platform buzz, lengthening it
+adds cue latency. Tune `fit_window_s` in
+`%APPDATA%\GRebelsTelemetry\settings.json`, or turn **Send G-forces** off
+entirely — position and orientation are unaffected, so tilt cueing still works.
+
+**The sim clock does not tick on every frame.** Around 22% of position updates
+arrive with the clock unchanged. Two positions sharing one timestamp is a
+division by zero in disguise; before this was handled it produced spikes to
+1661 m/s² — 169 g — and pinned every acceleration axis at the clamp. The
+sampler now keeps one sample per tick, which is also what the fit always
+assumed it had.
 
 **Offsets are per-build.** They're re-derived on each connect, but a large
 enough engine change could defeat the scan. It falls back to known offsets and

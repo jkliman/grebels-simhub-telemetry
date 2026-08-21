@@ -35,6 +35,7 @@ Write-Host "Building version $version"
     --paths src `
     --add-data "mod;mod" `
     --add-data "ue4ss-5.8;ue4ss-5.8" `
+    --add-data "simhub;simhub" `
     --hidden-import grebels_telemetry.app `
     run_app.py
 if ($LASTEXITCODE -ne 0) { throw "PyInstaller failed" }

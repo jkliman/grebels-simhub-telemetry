@@ -192,6 +192,10 @@ def install(binaries_dir, bundled_dir, progress=print):
 
 
 # ------------------------------------------------------- SimHub definition --
+#: Extensions worth copying into SimHub's Definitions folder. IconPath inside
+#: the .simdef is relative, so the artwork has to travel with it.
+DEFINITION_ASSETS = frozenset((".simdef", ".png", ".jpg", ".jpeg"))
+
 def simhub_definitions_dir():
     """Where SimHub scans for external sim definitions, or "" if unknown."""
     local = os.environ.get("LOCALAPPDATA")
@@ -228,9 +232,14 @@ def install_definition(bundled_dir, progress=print):
     copied = 0
     for name in os.listdir(source):
         origin = os.path.join(source, name)
-        if os.path.isfile(origin):
-            shutil.copy2(origin, os.path.join(destination, name))
-            copied += 1
+        # Only the definition and its artwork. The folder also carries our own
+        # README, which has no business landing in SimHub's data directory.
+        if not os.path.isfile(origin):
+            continue
+        if os.path.splitext(name)[1].lower() not in DEFINITION_ASSETS:
+            continue
+        shutil.copy2(origin, os.path.join(destination, name))
+        copied += 1
 
     # A stale registration pointing at an older copy would give SimHub two
     # definitions sharing one UniqueId.
