@@ -223,8 +223,13 @@ signature scan finds most of what it needs but fails on three AOBs — and the
 scan is all-or-nothing, so it aborts. Four things make it work, all applied
 automatically by **Install / repair**:
 
-1. **Current binaries** from the latest experimental build — the tagged
-   releases predate 5.8 by a long way.
+1. **Binaries from the rolling `experimental-latest` release.** Not a CI
+   artifact: UE4SS's repo expires those almost immediately — every run reports
+   `expired`, including builds two days old, and nightly.link 404s on them.
+   Chasing artifacts left the installer with no source at all. The release is
+   permanently hosted, and it is the build actually running here
+   (`v3.0.1 Beta #0 - Git SHA #d7e7826d`). What makes it work on 5.8 is the
+   overrides below, not its age.
 2. **Engine version pinned to 5.7** in `UE4SS-settings.ini`.
 3. **Signature and layout overrides** for the FName constructor,
    `FUObjectHashTables::Get` and `GNatives`.

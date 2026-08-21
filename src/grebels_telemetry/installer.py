@@ -25,9 +25,11 @@ import urllib.request
 import zipfile
 
 UE4SS_REPO = "UE4SS-RE/RE-UE4SS"
-WORKFLOW_NAME = "Make Experimental Release"
+#: The rolling prerelease. Permanently hosted, unlike CI artifacts.
+UE4SS_RELEASE_TAG = "experimental-latest"
+UE4SS_RELEASE_URL = ("https://api.github.com/repos/%s/releases/tags/%s"
+                     % (UE4SS_REPO, UE4SS_RELEASE_TAG))
 SOURCE_ZIP = "https://github.com/%s/archive/refs/heads/main.zip" % UE4SS_REPO
-NIGHTLY_TEMPLATE = "https://nightly.link/%s/actions/runs/%s/%s.zip"
 USER_AGENT = "grebels-simhub-telemetry"
 
 REQUIRED_BINARIES = ("dwmapi.dll", "UE4SS.dll")
@@ -52,26 +54,39 @@ def _get_json(url):
 
 
 # ------------------------------------------------------------- ue4ss fetch --
-def latest_experimental_run():
-    """Run id + artifact name of the most recent successful UE4SS build."""
-    url = ("https://api.github.com/repos/%s/actions/runs"
-           "?status=success&per_page=20&branch=main" % UE4SS_REPO)
-    runs = _get_json(url).get("workflow_runs", [])
-    for run in runs:
-        if run.get("name") != WORKFLOW_NAME:
-            continue
-        artifacts = _get_json(run["artifacts_url"]).get("artifacts", [])
-        for artifact in artifacts:
-            if not artifact.get("expired"):
-                return str(run["id"]), artifact["name"]
-    raise InstallError("no current UE4SS build found on GitHub")
+def experimental_release_asset():
+    """The UE4SS build to install: name and download URL.
+
+    This used to chase GitHub Actions artifacts, on the assumption that tagged
+    releases were too old for UE 5.8. That was wrong twice over.
+
+    Wrong on availability: the repo now expires build artifacts almost
+    immediately -- every run returned expired=True, including one built two
+    days earlier, and nightly.link 404s on all of them. The installer had no
+    source left and failed with "no current UE4SS build found".
+
+    Wrong on suitability: the build actually running against UE 5.8 reports
+    "v3.0.1 Beta #0 - Git SHA #d7e7826d", which is precisely the asset on the
+    rolling experimental-latest release. What makes it work on 5.8 is not its
+    recency, it is the signature and layout overrides in ue4ss-5.8/.
+
+    So: take the release. It is permanently hosted, a fifth of the size, and
+    is the exact build known to work here.
+    """
+    payload = _get_json(UE4SS_RELEASE_URL)
+    for asset in payload.get("assets", []):
+        name = asset.get("name", "")
+        # zDEV is the debug build; the z* extras are game configs and Blueprints.
+        if name.lower().startswith("ue4ss_") and name.lower().endswith(".zip"):
+            return name, asset["browser_download_url"]
+    raise InstallError("no UE4SS build found on the %s release"
+                       % UE4SS_RELEASE_TAG)
 
 
 def download_ue4ss_binaries(progress=print):
-    progress("Finding the latest UE4SS build...")
-    run_id, artifact_name = latest_experimental_run()
-    url = NIGHTLY_TEMPLATE % (UE4SS_REPO, run_id, artifact_name)
-    progress("Downloading UE4SS (run %s)..." % run_id)
+    progress("Finding the UE4SS build...")
+    name, url = experimental_release_asset()
+    progress("Downloading %s..." % name)
     return zipfile.ZipFile(io.BytesIO(_get(url, timeout=180)))
 
 
