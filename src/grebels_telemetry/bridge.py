@@ -122,6 +122,8 @@ class Status:
         self.offsets = {}
         self.destination = ""
         self.fields_resolved = 0
+        self.clamped = 0
+        self.duplicate_ticks = 0
         self.rounds_fired_total = 0
         self.ammo = 0.0
         self.heat = 0.0
@@ -226,6 +228,9 @@ class Bridge:
         self._missiles_pending = 0.0
         self._last_shot_at = -99.0
         self._in_menu = False
+        self._duplicate_ticks = 0
+        self._clamped = 0
+        self._ammo_seen_max = 0.0
 
     # -- lifecycle ----------------------------------------------------------
     def start(self):
@@ -376,6 +381,11 @@ class Bridge:
 
         ammo = values.get("PrimaryFireMagazineStatus")
         if ammo is not None:
+            # PrimaryFireMagazineSize reads 0 on a live craft, so the declared
+            # capacity is useless. The high-water mark of the counter is the
+            # magazine size, and it self-corrects across weapon upgrades.
+            if ammo > self._ammo_seen_max:
+                self._ammo_seen_max = float(ammo)
             if self._last_ammo is not None and ammo < self._last_ammo:
                 self._rounds_pending += self._last_ammo - ammo
                 self._last_shot_at = now
@@ -481,6 +491,16 @@ class Bridge:
                   dr2.unreal_to_packet_space(right_ue),
                   (pitch, yaw, roll))                       # raw, for SimHub native
         with self._lock:
+            if self._samples and self._samples[-1][0] == game_time:
+                # The craft moved but the sim clock did not tick. Measured at
+                # 22% of updates on a 25 s trace. Appending both would hand the
+                # fit two different positions at the SAME instant, which is a
+                # division by zero wearing a disguise -- it produced spikes up
+                # to 1661 m/s2 (169 g) and pinned the output at the clamp.
+                # Keep the newest position for the tick instead of stacking.
+                self._samples[-1] = sample
+                self._duplicate_ticks += 1
+                return False
             self._samples.append(sample)
         return True
 
@@ -525,14 +545,19 @@ class Bridge:
             got = gameplay.get(name)
             return default if got is None else got
 
+        # Measured at rest: TotalHeatPrimary == MaxHeatPrimary == 100, so
+        # "Total" is remaining capacity, not accumulated heat -- full when
+        # cold. Inverted here so the channel rises as the gun heats up, which
+        # is what an effect wants. Confirm the direction while firing.
         heat_max = value("MaxHeatPrimary")
-        heat = value("TotalHeatPrimary") / heat_max if heat_max else 0.0
+        heat = 1.0 - (value("TotalHeatPrimary") / heat_max) if heat_max else 0.0
 
         return {
             "rounds_fired": rounds,
             "fire_impulse": impulse,
             "ammo_primary": value("PrimaryFireMagazineStatus"),
-            "ammo_max": value("PrimaryFireMagazineSize"),
+            "ammo_max": max(self._ammo_seen_max,
+                            value("PrimaryFireMagazineSize")),
             "heat_primary": max(0.0, min(1.0, heat)),
             "is_overheated": 1 if value("isOverheatedPrimary") else 0,
             "shoot_left": 1 if value("ShootLeft") else 0,
@@ -672,7 +697,12 @@ class Bridge:
                     if send_native:
                         pitch, yaw, roll = state["rotation"]
                         limit_ms2 = limit * GRAVITY
-                        clamp_ms2 = lambda v: max(-limit_ms2, min(limit_ms2, v))
+
+                        def clamp_ms2(v):
+                            if v > limit_ms2 or v < -limit_ms2:
+                                self._clamped += 1
+                                return max(-limit_ms2, min(limit_ms2, v))
+                            return v
                         fields = simdef.motion_fields(
                             pitch, yaw, roll, state["speed"],
                             clamp_ms2(surge), clamp_ms2(sway), clamp_ms2(heave))
@@ -702,6 +732,8 @@ class Bridge:
                         speed_ms=state["speed"], altitude_m=state["position"][1],
                         g_longitudinal=g_long, g_lateral=g_lat, packets_sent=sent,
                         rounds_fired_total=rounds_total,
+                        clamped=self._clamped,
+                        duplicate_ticks=self._duplicate_ticks,
                         ammo=gameplay.get("PrimaryFireMagazineStatus", 0.0) or 0.0,
                         heat=self._gameplay_fields(
                             gameplay, 0, 0, 0)["heat_primary"])

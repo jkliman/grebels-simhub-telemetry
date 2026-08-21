@@ -180,6 +180,32 @@ check("utf8z is exactly 8 bytes", len(packed) == 8, len(packed))
 check("utf8z always terminates", b"\x00" in packed)
 check("utf8z decodes cleanly", packed.split(b"\x00")[0].decode("utf-8") == "\u00e9\u00e9\u00e9")
 
+print("duplicate sim-clock ticks")
+# On a 25 s trace, 22% of position updates arrived with no clock advance.
+# Two positions sharing one timestamp is a divide-by-zero in disguise: it
+# produced spikes to 1661 m/s2 before the fix.
+dup = [(1.0, (0.0, 0, 0)), (1.0, (5.0, 0, 0)), (1.0, (9.0, 0, 0)),
+       (1.0, (14.0, 0, 0)), (1.0, (20.0, 0, 0)), (1.0, (27.0, 0, 0))]
+v_dup, a_dup = fit_motion(dup, 0)
+check("all-duplicate timestamps stay finite",
+      abs(v_dup) < 1e6 and abs(a_dup) < 1e6, (v_dup, a_dup))
+
+# and the real defence: the sampler must collapse them before they reach the fit
+class _FakeDeque(list):
+    pass
+
+collapsed, last_t = [], None
+for t, p in [(1.0, 0.0), (1.0, 5.0), (1.008, 9.0), (1.008, 14.0), (1.017, 20.0)]:
+    if collapsed and collapsed[-1][0] == t:
+        collapsed[-1] = (t, (p, 0.0, 0.0))
+    else:
+        collapsed.append((t, (p, 0.0, 0.0)))
+check("collapse keeps one sample per tick", len(collapsed) == 3, len(collapsed))
+check("collapse keeps the NEWEST position",
+      collapsed[0][1][0] == 5.0 and collapsed[1][1][0] == 14.0)
+times = [c[0] for c in collapsed]
+check("timestamps strictly increase", all(times[i] > times[i-1] for i in range(1, len(times))))
+
 print()
 if failures:
     print("%d FAILED" % len(failures))
