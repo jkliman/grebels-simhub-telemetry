@@ -206,6 +206,41 @@ check("collapse keeps the NEWEST position",
 times = [c[0] for c in collapsed]
 check("timestamps strictly increase", all(times[i] > times[i-1] for i in range(1, len(times))))
 
+print("shot counting")
+# The primary gun is heat-limited, not magazine-limited: the ammo counter
+# reads 0 all through flight while the guns fire. ShootLeft flips once per
+# shot as the barrels alternate, so that is the event source -- gated on the
+# fire controls so a stray flip cannot invent a round.
+class _ShotCounter:
+    def __init__(self):
+        self.last = None
+        self.rounds = 0.0
+
+    def feed(self, shoot_left, firing):
+        if self.last is not None and shoot_left != self.last and firing:
+            self.rounds += 1.0
+        self.last = shoot_left
+
+
+c = _ShotCounter()
+for flag in (0, 1, 0, 1, 0):
+    c.feed(flag, True)
+check("alternating barrels count one shot each", c.rounds == 4.0, c.rounds)
+
+c = _ShotCounter()
+for flag in (0, 1, 0, 1):
+    c.feed(flag, False)
+check("flips while not firing count nothing", c.rounds == 0.0, c.rounds)
+
+c = _ShotCounter()
+for flag in (1, 1, 1, 1):
+    c.feed(flag, True)
+check("holding the trigger without a flip counts nothing", c.rounds == 0.0, c.rounds)
+
+c = _ShotCounter()
+c.feed(1, True)
+check("first sample cannot fire (no previous state)", c.rounds == 0.0, c.rounds)
+
 print()
 if failures:
     print("%d FAILED" % len(failures))

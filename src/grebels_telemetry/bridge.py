@@ -224,6 +224,7 @@ class Bridge:
         self._next_gameplay_read = 0.0
         self._last_ammo = None
         self._last_missiles = None
+        self._last_shoot_left = None
         self._rounds_pending = 0.0
         self._missiles_pending = 0.0
         self._last_shot_at = -99.0
@@ -323,6 +324,7 @@ class Bridge:
             self._set_fields(target["fields"])
             self._last_ammo = None
             self._last_missiles = None
+            self._last_shoot_left = None
             with self._lock:
                 self._samples.clear()
                 self.status.update(craft=self._craft)
@@ -379,16 +381,33 @@ class Bridge:
             except struct.error:
                 continue
 
+        # Shots are counted from the ALTERNATING BARREL flag, not from ammo.
+        #
+        # Measured over two live firing runs: PrimaryFireMagazineStatus reads 0
+        # throughout flight while the guns are plainly firing -- ShootLeft
+        # toggled 18 times and 816 frames came back overheated. The primary
+        # weapon is heat-limited, not magazine-limited; what the pilot
+        # experiences as "magazine emptied" is the overheat cutout. So the
+        # magazine counter is not a shot source, and TotalHeatPrimary is the
+        # real "can I shoot" resource.
+        #
+        # ShootLeft flips once per shot as the barrels alternate, which makes
+        # it an exact per-shot event. It is gated on the fire controls so a
+        # flip while not shooting cannot invent a round.
+        shoot_left = values.get("ShootLeft")
+        firing = bool(values.get("PrimaryFire_pressed")
+                      or values.get("PrimaryFire_Success"))
+        if shoot_left is not None:
+            if (self._last_shoot_left is not None
+                    and shoot_left != self._last_shoot_left and firing):
+                self._rounds_pending += 1.0
+                self._last_shot_at = now
+            self._last_shoot_left = shoot_left
+
         ammo = values.get("PrimaryFireMagazineStatus")
         if ammo is not None:
-            # PrimaryFireMagazineSize reads 0 on a live craft, so the declared
-            # capacity is useless. The high-water mark of the counter is the
-            # magazine size, and it self-corrects across weapon upgrades.
             if ammo > self._ammo_seen_max:
                 self._ammo_seen_max = float(ammo)
-            if self._last_ammo is not None and ammo < self._last_ammo:
-                self._rounds_pending += self._last_ammo - ammo
-                self._last_shot_at = now
             self._last_ammo = ammo
 
         missiles = values.get("AvailableMissiles")
