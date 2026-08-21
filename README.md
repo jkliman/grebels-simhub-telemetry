@@ -24,11 +24,12 @@ racing game.
 
 ## Quick start
 
-1. Download `GRebelsTelemetry.exe` from
-   [Releases](../../releases) and run it. No installer, no admin rights.
-2. It should find your G-Rebels folder automatically. Press **Install / repair**.
-   That fetches UE4SS, applies the UE 5.8 compatibility files, and drops in the
-   telemetry mod, and installs the SimHub definition if SimHub is on this PC.
+1. Download `GRebelsTelemetry-x.y.z.msi` from
+   [Releases](../../releases) and run it. It installs the app, adds the G Rebels
+   definition to SimHub, and — if you tick the box — fetches the AZOM plugin for
+   MOZA AB9 force feedback. See [Installer](#installer) for what each step does.
+2. Launch **G-Rebels Telemetry** and press **Install / repair**. That fetches
+   UE4SS, applies the UE 5.8 compatibility files, and drops in the telemetry mod.
 3. **Restart SimHub**, then pick **G Rebels** in its games list. If SimHub is on
    this same PC the definition was installed for you in step 2; for a separate
    rig see [below](#if-simhub-is-on-a-different-machine).
@@ -39,6 +40,37 @@ racing game.
 The window shows your craft, speed, altitude, packet rate and how fast the game
 is updating. The taskbar title tracks your speed, so you can see at a glance
 that it's live while the game is fullscreen.
+
+### Installer
+
+The MSI asks two things: where SimHub lives, and whether you want AB9 force
+feedback. Both are optional — leave them alone and you get a working telemetry
+app, nothing more.
+
+**The SimHub folder is only needed for AZOM.** The G Rebels definition installs
+into your user profile regardless, so it needs no path and no elevation. The box
+is pre-filled by searching for `SimHubWPF.exe` rather than a folder called
+"SimHub", so an empty directory left over from an uninstall can't fool it. Don't
+have SimHub? The dialog links to [its download page](https://www.simhubdash.com/download-2/?downloadnow=1).
+
+**AZOM is off by default.** Ticking it downloads the newest *stable* release
+from [AZOM's own repository](https://github.com/giantorth/AZOM/releases) and
+places `MozaPlugin.dll` in SimHub. Specifics worth knowing:
+
+* It resolves `/releases/latest`, not the top of the release list. Three of the
+  four most recent entries on that repo are PR prereleases — "newest" would put
+  an untested build on your rig.
+* The archive is checked before anything is written into Program Files: exactly
+  one DLL, no path separators in the entry name, a plausible size, and a real
+  `MZ` header. A release that changes shape gets refused rather than trusted.
+* **Close SimHub first.** It holds the plugin open, and the install refuses
+  rather than half-replacing it.
+* Your previous `MozaPlugin.dll` is kept as `MozaPlugin.dll.bak`.
+* SimHub will ask you to enable the plugin the next time it starts.
+
+AZOM is GPL-3.0 and this project is MIT, so its binary is **never bundled**. The
+installer fetches it from upstream, which leaves you obtaining it from the
+authors and us merely putting it in place.
 
 ### If SimHub is on a different machine
 
@@ -52,6 +84,10 @@ travel. Copy both of these from this PC:
 
 into the identical folder on the rig, then restart SimHub. They must stay
 together — `IconPath` inside the definition is relative. Nothing else transfers.
+
+Or just run the MSI on the rig too and let it do the copying: the telemetry app
+it also installs is harmless there, and it means the AZOM option is available on
+the machine that actually has your stick plugged in.
 
 Then allow the packets through the firewall **on the SimHub machine**:
 
@@ -227,10 +263,13 @@ says so in the window.
 ```powershell
 git clone https://github.com/jkliman/grebels-simhub-telemetry
 cd grebels-simhub-telemetry
-powershell -ExecutionPolicy Bypass -File tools\build_exe.ps1
+powershell -ExecutionPolicy Bypass -File tools\build_msi.ps1
 ```
 
-Produces `dist\GRebelsTelemetry.exe`. To run without building:
+Produces `dist\GRebelsTelemetry-x.y.z.msi`. The WiX 3.14 toolset is fetched on
+first run — it's a plain zip needing no .NET SDK, unlike WiX 4+ which is a
+dotnet tool. `tools\build_exe.ps1` builds just the app if you don't want an
+installer. To run without building anything:
 
 ```powershell
 python run_app.py
