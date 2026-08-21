@@ -22,10 +22,10 @@ import struct
 # -- generated constants (from SHTelemetryConstants) -------------------------
 DEFINITION_UNIQUE_ID = "971ee505-8741-4fe4-9dc8-9df425e07242"
 GAME_SIGNATURE = 0x18B2ACA6
-TELEMETRY_SIGNATURE = 0xBD1B224C
+TELEMETRY_SIGNATURE = 0x3C4D8E8D
 LAYOUT_MAJOR = 1
 LAYOUT_MINOR = 0
-EXPECTED_PACKET_LENGTH = 187
+EXPECTED_PACKET_LENGTH = 211
 DEFAULT_PORT = 30777
 
 GRAVITY = 9.80665
@@ -67,7 +67,10 @@ _FIELDS = ("i"     # time_ms
            "f"     # boost_axis
            "i"     # boost_active
            "f"     # boost_time_pct
-           "ii")   # landing_gear, is_landing
+           "ii"    # landing_gear, is_landing
+           "ff"    # EngineRpm, EngineMaxRpm                 [standard]
+           "ff"    # Throttle, Brake                         [standard]
+           "8s")   # Gear -- UTF8Z(8), a STRING not a number [standard]
 
 PACKET = struct.Struct(_HEADER + _FIELDS)
 
@@ -85,7 +88,13 @@ FIELD_NAMES = [
     "health", "shield", "shield_max",
     "boost_axis", "boost_active", "boost_time_pct",
     "landing_gear", "is_landing",
+    "EngineRpm", "EngineMaxRpm", "Throttle", "Brake", "Gear",
 ]
+
+#: Fixed-width UTF-8, NUL-terminated. SimHub reports gear as text ("N", "R",
+#: "3"), and AZOM's AB9 shift kick fires on gear-STRING transitions, so this
+#: has to be a string field rather than the integer it looks like it wants.
+STRING_FIELDS = {"Gear": 8}
 
 INT_FIELDS = frozenset((
     "time_ms", "is_overheated", "shoot_left", "missile_warning",
@@ -203,6 +212,10 @@ class Sender:
             self.discontinuity_counter,
         ]
         for name in FIELD_NAMES:
+            width = STRING_FIELDS.get(name)
+            if width is not None:
+                values.append(encode_utf8z(fields.get(name, ""), width))
+                continue
             value = fields.get(name, 0)
             values.append(int(value) if name in INT_FIELDS else float(value))
         return PACKET.pack(*values)
@@ -211,6 +224,32 @@ class Sender:
         packet = self.build(*args, **kwargs)
         self._sock.sendto(packet, (self.host, self.port))
         return packet
+
+
+def encode_utf8z(text, width):
+    """Fixed-width UTF-8 with a guaranteed NUL terminator.
+
+    Truncation reserves room for the terminator and then backs off to a
+    character boundary: slicing encoded bytes alone would happily cut a
+    multi-byte character in half and hand the reader an invalid sequence.
+    Gear labels are ASCII today, but the field is a string and should behave
+    like one.
+    """
+    raw = ("" if text is None else str(text)).encode("utf-8")[:width - 1]
+    raw = raw.decode("utf-8", "ignore").encode("utf-8")     # back to a boundary
+    return raw + b"\x00" * (width - len(raw))
+
+
+def gear_label(index):
+    """SimHub-style gear text. 0 is neutral, negative is reverse."""
+    if index is None:
+        return "N"
+    index = int(index)
+    if index < 0:
+        return "R"
+    if index == 0:
+        return "N"
+    return str(index)
 
 
 def math_dist(a, b):
@@ -230,4 +269,8 @@ def parse_packet(data):
         "session_time": raw[14], "discontinuity": raw[15],
     }
     result.update(zip(FIELD_NAMES, raw[16:]))
+    for name in STRING_FIELDS:
+        value = result.get(name)
+        if isinstance(value, bytes):
+            result[name] = value.split(b"\x00", 1)[0].decode("utf-8", "replace")
     return result

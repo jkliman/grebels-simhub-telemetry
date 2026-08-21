@@ -42,6 +42,16 @@ class Config:
         "g_clamp": 6.0,
         "send_g_forces": True,
         "allow_fallback_offsets": True,
+        # Synthetic engine channels. G-Rebels has no engine, but AZOM drives
+        # the AB9's buzz from Rpm/MaxRpm and its shift kick from Gear, so we
+        # fabricate them from thrust and speed to get haptics out of hardware
+        # that only speaks car.
+        "synth_engine": True,
+        "synth_idle_rpm": 1200.0,
+        "synth_max_rpm": 8000.0,
+        "synth_reference_speed_ms": 200.0,   # fallback if the game's own max is unusable
+        "synth_gear": False,                 # AZOM kicks the stick on every gear change
+        "synth_gear_count": 6,
         "game_path": "",
     }
 

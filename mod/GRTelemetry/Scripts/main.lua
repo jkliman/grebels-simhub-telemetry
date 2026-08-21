@@ -62,6 +62,8 @@ local WANTED = {
     "EngineBoostTimePercentage",
     "LandingGearActive",
     "isLanding",
+    "CurrentVelocity",             -- the game's own speed scalar
+    "CurrentMaxVelocity",          -- denominator for the synthetic RPM
     "Force F Primary Fire",        -- unverified: may be a tuning constant
     "Force F Secondary Fire",
 }

@@ -71,11 +71,16 @@ check("identical timestamps are safe",
 
 print("simdef packet")
 from grebels_telemetry import simdef
-check("187 bytes", simdef.PACKET.size == 187, simdef.PACKET.size)
-check("33 fields", len(simdef.FIELD_NAMES) == 33, len(simdef.FIELD_NAMES))
+# Pinned to the constants the generated C# dictates, so a future field append
+# updates in one place instead of leaving stale numbers here.
+check("packet matches definition length",
+      simdef.PACKET.size == simdef.EXPECTED_PACKET_LENGTH, simdef.PACKET.size)
+check("field count matches layout",
+      len(simdef.FIELD_NAMES) == 38, len(simdef.FIELD_NAMES))
 sender = simdef.Sender()
 native = sender.build({}, 0.0)
-check("builds 187", len(native) == 187, len(native))
+check("builds a full packet",
+      len(native) == simdef.EXPECTED_PACKET_LENGTH, len(native))
 decoded = simdef.parse_packet(native)
 check("signatures", decoded["game_signature"] == simdef.GAME_SIGNATURE
       and decoded["telemetry_signature"] == simdef.TELEMETRY_SIGNATURE)
@@ -132,6 +137,48 @@ check("name with spaces survives",
 check("unknown property kind dropped", "ShouldBeIgnored" not in resolved)
 check("nil rotation is None", parsed["rot"] is None)
 check("pawn address parsed", parsed["pawn_addr"] == 0x7FF390E6A000)
+
+print("synthetic engine channels")
+from grebels_telemetry.config import Config
+from grebels_telemetry.bridge import Bridge
+
+
+def engine(speed_ms, surge=0.0, **game):
+    return Bridge(Config(**game.pop("cfg", {})))._engine_fields(game, speed_ms, surge)
+
+idle = engine(0.0)
+check("stationary sits at idle", abs(idle["EngineRpm"] - 1200.0) < 1e-6, idle["EngineRpm"])
+fast = engine(200.0)
+check("rpm rises with speed", fast["EngineRpm"] > idle["EngineRpm"] + 3000, fast["EngineRpm"])
+boosted = engine(200.0, EngineBoosterIsActive=True)
+check("boost adds on top", boosted["EngineRpm"] > fast["EngineRpm"], boosted["EngineRpm"])
+check("rpm never exceeds redline", boosted["EngineRpm"] <= 8000.0 + 1e-9, boosted["EngineRpm"])
+check("boosting reads full throttle", boosted["Throttle"] == 1.0)
+over = engine(9999.0, EngineBoosterIsActive=True)
+check("absurd speed still clamps", over["EngineRpm"] <= 8000.0 + 1e-9, over["EngineRpm"])
+
+# the game's own max velocity is in Unreal cm/s and is sometimes junk
+scaled = engine(100.0, CurrentMaxVelocity=20000.0)     # = 200 m/s
+check("game max velocity is used when sane",
+      abs(scaled["EngineRpm"] - engine(100.0)["EngineRpm"]) < 1e-6, scaled["EngineRpm"])
+junk = engine(100.0, CurrentMaxVelocity=0.0)
+check("zero max velocity falls back", abs(junk["EngineRpm"] - engine(100.0)["EngineRpm"]) < 1e-6)
+
+check("gear stays neutral by default", engine(150.0)["Gear"] == "N")
+check("braking reads on deceleration",
+      engine(150.0, -9.80665)["Brake"] == 1.0, engine(150.0, -9.80665)["Brake"])
+check("accelerating is not braking", engine(150.0, 5.0)["Brake"] == 0.0)
+
+print("gear text")
+check("neutral", simdef.gear_label(0) == "N")
+check("reverse", simdef.gear_label(-2) == "R")
+check("third", simdef.gear_label(3) == "3")
+check("none is neutral", simdef.gear_label(None) == "N")
+# a multi-byte character must not be sliced in half and left unterminated
+packed = simdef.encode_utf8z("\u00e9\u00e9\u00e9\u00e9\u00e9", 8)
+check("utf8z is exactly 8 bytes", len(packed) == 8, len(packed))
+check("utf8z always terminates", b"\x00" in packed)
+check("utf8z decodes cleanly", packed.split(b"\x00")[0].decode("utf-8") == "\u00e9\u00e9\u00e9")
 
 print()
 if failures:

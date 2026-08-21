@@ -549,6 +549,57 @@ class Bridge:
             "is_landing": 1 if value("isLanding") else 0,
         }
 
+    def _engine_fields(self, gameplay, speed_ms, surge_ms2):
+        """Fabricate engine channels so car-shaped plugins have something to bite on.
+
+        G-Rebels has no engine and no gearbox. AZOM drives the AB9's vibration
+        frequency from rpm/maxRpm and fires its shift kick on gear-string
+        changes, so without these the stick stays silent. RPM leans mostly on
+        speed with a boost contribution, which makes the buzz rise as you
+        accelerate and jump when the booster lights.
+        """
+        config = self.config
+        if not config.synth_engine:
+            return {"Gear": "N"}
+
+        idle, top = config.synth_idle_rpm, config.synth_max_rpm
+
+        # Prefer the game's own maximum; it is in Unreal units (cm/s) and is
+        # occasionally zero or absurd, so it is range-checked before use.
+        reference = config.synth_reference_speed_ms
+        game_max = gameplay.get("CurrentMaxVelocity")
+        if game_max:
+            candidate = game_max / 100.0
+            if 20.0 <= candidate <= 1000.0:
+                reference = candidate
+
+        speed_fraction = max(0.0, min(1.0, speed_ms / reference if reference else 0.0))
+
+        boost_axis = gameplay.get("BoostAxis") or 0.0
+        boosting = bool(gameplay.get("EngineBoosterIsActive"))
+        boost = 1.0 if boosting else max(0.0, min(1.0, boost_axis))
+
+        load = 0.72 * speed_fraction + 0.28 * boost
+        rpm = idle + load * (top - idle)
+
+        # Deceleration reads as braking. Half a g of retardation is treated as
+        # full brake, which is roughly where airbraking becomes obvious.
+        brake = max(0.0, min(1.0, -surge_ms2 / (0.5 * GRAVITY)))
+
+        if config.synth_gear:
+            count = max(1, int(config.synth_gear_count))
+            gear = simdef.gear_label(min(count, int(speed_fraction * count) + 1))
+        else:
+            gear = "N"
+
+        return {
+            "EngineRpm": rpm,
+            "EngineMaxRpm": top,
+            "Throttle": 1.0 if boosting else max(0.0, min(1.0, boost_axis)),
+            "Brake": brake,
+            "Gear": gear,
+        }
+
     def _sender_loop(self):
         sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         mode = self.config.output_mode
@@ -639,6 +690,8 @@ class Bridge:
                         })
                         fields.update(self._gameplay_fields(
                             gameplay, rounds, missiles, impulse))
+                        fields.update(self._engine_fields(
+                            gameplay, state["speed"], surge))
                         native.note_position(position)
                         native.send(fields, state["time"],
                                     running=not self._in_menu,
