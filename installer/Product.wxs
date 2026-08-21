@@ -1,0 +1,194 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  G-Rebels telemetry installer.
+
+  The MSI deliberately does very little: it lays down two executables and
+  collects two answers. Everything with a chance of failing at runtime —
+  reaching GitHub, unpacking an archive, writing into SimHub — happens in
+  grsetup.exe, where it is ordinary testable code rather than an MSI custom
+  action.
+
+  Two custom actions, and the split matters:
+
+    * the definition goes to per-user LocalAppData, so that action is
+      deferred AND impersonated. Run it as SYSTEM and the files land in
+      SYSTEM's profile where SimHub will never look.
+    * AZOM's plugin goes into Program Files, so that action is deferred and
+      NOT impersonated, because it needs the elevated token.
+-->
+<Wix xmlns="http://schemas.microsoft.com/wix/2006/wi"
+     xmlns:util="http://schemas.microsoft.com/wix/UtilExtension">
+
+  <Product Id="*"
+           Name="G-Rebels Telemetry"
+           Language="1033"
+           Version="$(var.ProductVersion)"
+           Manufacturer="jkliman"
+           UpgradeCode="8f3d1c74-5f1a-4a1e-9b0e-1d2a6f4c9e77">
+
+    <Package InstallerVersion="500"
+             Compressed="yes"
+             InstallScope="perMachine"
+             Description="Motion telemetry for G-Rebels"
+             Comments="Streams G-Rebels flight data to SimHub" />
+
+    <MajorUpgrade DowngradeErrorMessage="A newer version of G-Rebels Telemetry is already installed." />
+    <MediaTemplate EmbedCab="yes" />
+
+    <Icon Id="AppIcon" SourceFile="$(var.IconFile)" />
+    <Property Id="ARPPRODUCTICON" Value="AppIcon" />
+    <Property Id="ARPURLINFOABOUT" Value="https://github.com/jkliman/grebels-simhub-telemetry" />
+    <Property Id="WIXUI_INSTALLDIR" Value="INSTALLFOLDER" />
+
+    <!-- Default the SimHub box by looking for the executable, not the folder
+         name: an empty "SimHub" directory left behind by an uninstall would
+         otherwise pass for an install. -->
+    <Property Id="SIMHUBDIR">
+      <DirectorySearch Id="SimHubX86" Path="[ProgramFilesFolder]SimHub">
+        <FileSearch Id="SimHubExeX86" Name="SimHubWPF.exe" />
+      </DirectorySearch>
+    </Property>
+    <Property Id="SIMHUBDIR">
+      <DirectorySearch Id="SimHub64" Path="[ProgramFiles64Folder]SimHub">
+        <FileSearch Id="SimHubExe64" Name="SimHubWPF.exe" />
+      </DirectorySearch>
+    </Property>
+
+    <!-- Off by default. AZOM is GPL-3.0 and this installer is MIT, so its
+         binary is never bundled; ticking this fetches it from the official
+         repository at install time. -->
+    <Property Id="INSTALLAZOM" Value="0" />
+    <Property Id="INSTALLDEFINITION" Value="1" />
+
+    <Directory Id="TARGETDIR" Name="SourceDir">
+      <Directory Id="ProgramFilesFolder">
+        <Directory Id="INSTALLFOLDER" Name="G-Rebels Telemetry" />
+      </Directory>
+      <Directory Id="ProgramMenuFolder">
+        <Directory Id="AppShortcutFolder" Name="G-Rebels Telemetry" />
+      </Directory>
+    </Directory>
+
+    <DirectoryRef Id="INSTALLFOLDER">
+      <Component Id="AppExe" Guid="*">
+        <File Id="GRebelsTelemetryExe"
+              Source="$(var.AppExe)"
+              KeyPath="yes">
+          <Shortcut Id="StartMenuShortcut"
+                    Directory="AppShortcutFolder"
+                    Name="G-Rebels Telemetry"
+                    Description="Stream G-Rebels flight data to SimHub"
+                    Icon="AppIcon"
+                    Advertise="yes" />
+        </File>
+      </Component>
+      <Component Id="SetupExe" Guid="*">
+        <File Id="GrSetupExe" Source="$(var.SetupExe)" KeyPath="yes" />
+      </Component>
+    </DirectoryRef>
+
+    <DirectoryRef Id="AppShortcutFolder">
+      <Component Id="ShortcutFolder" Guid="*">
+        <RemoveFolder Id="RemoveShortcutFolder" On="uninstall" />
+        <RegistryValue Root="HKCU"
+                       Key="Software\jkliman\GRebelsTelemetry"
+                       Name="installed" Type="integer" Value="1" KeyPath="yes" />
+      </Component>
+    </DirectoryRef>
+
+    <Feature Id="Complete" Title="G-Rebels Telemetry" Level="1">
+      <ComponentRef Id="AppExe" />
+      <ComponentRef Id="SetupExe" />
+      <ComponentRef Id="ShortcutFolder" />
+    </Feature>
+
+    <!-- ============================ custom actions ==================== -->
+    <CustomAction Id="SetDefinitionCmd" Property="RunDefinition"
+                  Value="&quot;[INSTALLFOLDER]grsetup.exe&quot; --definition" />
+    <CustomAction Id="RunDefinition"
+                  BinaryKey="WixCA" DllEntry="WixQuietExec"
+                  Execute="deferred" Impersonate="yes" Return="ignore" />
+
+    <CustomAction Id="SetAzomCmd" Property="RunAzom"
+                  Value="&quot;[INSTALLFOLDER]grsetup.exe&quot; --azom --simhub &quot;[SIMHUBDIR]&quot;" />
+    <CustomAction Id="RunAzom"
+                  BinaryKey="WixCA" DllEntry="WixQuietExec"
+                  Execute="deferred" Impersonate="no" Return="ignore" />
+
+    <InstallExecuteSequence>
+      <Custom Action="SetDefinitionCmd" After="CostFinalize">
+        NOT Installed AND INSTALLDEFINITION = "1"
+      </Custom>
+      <Custom Action="RunDefinition" After="InstallFiles">
+        NOT Installed AND INSTALLDEFINITION = "1"
+      </Custom>
+      <Custom Action="SetAzomCmd" After="CostFinalize">
+        NOT Installed AND INSTALLAZOM = "1"
+      </Custom>
+      <Custom Action="RunAzom" After="RunDefinition">
+        NOT Installed AND INSTALLAZOM = "1"
+      </Custom>
+    </InstallExecuteSequence>
+
+    <!-- ================================ UI ============================ -->
+    <UIRef Id="WixUI_InstallDir" />
+    <UIRef Id="WixUI_ErrorProgressText" />
+
+    <UI Id="GRebelsUI">
+      <Dialog Id="SimHubDlg" Width="370" Height="270" Title="[ProductName] Setup">
+        <Control Id="Title" Type="Text" X="15" Y="6" Width="200" Height="15"
+                 Transparent="yes" NoPrefix="yes"
+                 Text="{\WixUI_Font_Title}SimHub" />
+        <Control Id="Description" Type="Text" X="25" Y="23" Width="330" Height="20"
+                 Transparent="yes" NoPrefix="yes"
+                 Text="Where SimHub is installed, and whether to add AB9 flight stick support." />
+        <Control Id="BannerBitmap" Type="Bitmap" X="0" Y="0" Width="370" Height="44"
+                 TabSkip="no" Text="!(loc.SimHubDlgBannerBitmap)" />
+        <Control Id="BannerLine" Type="Line" X="0" Y="44" Width="370" Height="0" />
+        <Control Id="BottomLine" Type="Line" X="0" Y="234" Width="370" Height="0" />
+
+        <Control Id="FolderLabel" Type="Text" X="20" Y="60" Width="330" Height="20"
+                 NoPrefix="yes"
+                 Text="SimHub install folder. Only needed for the AB9 plugin — the G Rebels game definition installs to your user profile either way." />
+        <Control Id="FolderEdit" Type="PathEdit" X="20" Y="86" Width="252" Height="18"
+                 Property="SIMHUBDIR" Indirect="no" />
+        <Control Id="BrowseButton" Type="PushButton" X="276" Y="85" Width="66" Height="19"
+                 Text="!(loc.WixUIBrowse)">
+          <Publish Property="_BrowseProperty" Value="SIMHUBDIR" Order="1">1</Publish>
+          <Publish Event="SpawnDialog" Value="BrowseDlg" Order="2">1</Publish>
+        </Control>
+
+        <Control Id="NotInstalled" Type="Hyperlink" X="20" Y="110" Width="330" Height="17">
+          <Text><![CDATA[Don't have SimHub? <a href="https://www.simhubdash.com/download-2/?downloadnow=1">Download it here</a>, then come back.]]></Text>
+        </Control>
+
+        <Control Id="AzomCheck" Type="CheckBox" X="20" Y="140" Width="330" Height="18"
+                 Property="INSTALLAZOM" CheckBoxValue="1"
+                 Text="Add MOZA AB9 flight stick support (AZOM plugin)" />
+        <Control Id="AzomNote" Type="Text" X="34" Y="160" Width="316" Height="46"
+                 NoPrefix="yes"
+                 Text="Downloads the latest stable AZOM release from its official GitHub repository and places the plugin in SimHub. AZOM is GPL-3.0 licensed and is not redistributed by this installer. Close SimHub before continuing, or the plugin cannot be replaced." />
+
+        <Control Id="Back" Type="PushButton" X="180" Y="243" Width="56" Height="17"
+                 Text="!(loc.WixUIBack)">
+          <Publish Event="NewDialog" Value="InstallDirDlg">1</Publish>
+        </Control>
+        <Control Id="Next" Type="PushButton" X="236" Y="243" Width="56" Height="17"
+                 Default="yes" Text="!(loc.WixUINext)">
+          <Publish Event="NewDialog" Value="VerifyReadyDlg">1</Publish>
+        </Control>
+        <Control Id="Cancel" Type="PushButton" X="304" Y="243" Width="56" Height="17"
+                 Cancel="yes" Text="!(loc.WixUICancel)">
+          <Publish Event="SpawnDialog" Value="CancelDlg">1</Publish>
+        </Control>
+      </Dialog>
+
+      <!-- splice SimHubDlg between the install-folder and confirm pages -->
+      <Publish Dialog="InstallDirDlg" Control="Next" Event="NewDialog"
+               Value="SimHubDlg" Order="3">1</Publish>
+      <Publish Dialog="VerifyReadyDlg" Control="Back" Event="NewDialog"
+               Value="SimHubDlg" Order="3">1</Publish>
+    </UI>
+
+  </Product>
+</Wix>

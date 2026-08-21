@@ -7,3 +7,4 @@ dist/
 *.csv
 *.log
 *.err
+tools/wix/

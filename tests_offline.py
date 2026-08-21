@@ -241,6 +241,46 @@ c = _ShotCounter()
 c.feed(1, True)
 check("first sample cannot fire (no previous state)", c.rounds == 0.0, c.rounds)
 
+print("AZOM archive handling")
+import zipfile as _zip, io as _io
+from grebels_telemetry import simhub_setup as _ss
+
+
+def _archive(entries):
+    buf = _io.BytesIO()
+    with _zip.ZipFile(buf, "w") as z:
+        for name, data in entries:
+            z.writestr(name, data)
+    return buf.getvalue()
+
+
+good = b"MZ" + b"\x00" * (400 * 1024)
+name, data = _ss.extract_plugin(_archive([("MozaPlugin.dll", good)]))
+check("extracts the plugin", name == "MozaPlugin.dll" and data == good)
+
+def _rejects(entries, label):
+    try:
+        _ss.extract_plugin(_archive(entries))
+    except _ss.SetupError:
+        check(label, True)
+    else:
+        check(label, False, "accepted something it should not have")
+
+# a release that suddenly ships a path, or something hostile, must not be
+# written blind into Program Files
+_rejects([("plugins/../../evil.dll", good)], "rejects a path-traversing entry")
+_rejects([("sub/dir/MozaPlugin.dll", good)], "rejects a nested entry")
+_rejects([("a.dll", good), ("b.dll", good)], "rejects multiple DLLs")
+_rejects([("readme.txt", b"nope")], "rejects an archive with no DLL")
+_rejects([("MozaPlugin.dll", b"MZ" + b"\x00" * 10)], "rejects an implausibly small DLL")
+_rejects([("MozaPlugin.dll", b"XX" + b"\x00" * (400 * 1024))],
+         "rejects a file that is not a Windows binary")
+
+print("simhub discovery")
+check("a folder without SimHubWPF.exe is not SimHub",
+      not _ss.looks_like_simhub(os.path.dirname(os.path.abspath(__file__))))
+check("empty path is not SimHub", not _ss.looks_like_simhub(""))
+
 print()
 if failures:
     print("%d FAILED" % len(failures))
