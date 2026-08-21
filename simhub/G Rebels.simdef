@@ -226,5 +226,5 @@
   "SimStartArguments": null,
   "UseExtractorProcess": false,
   "ExtractorProcessCommand": "E:\\SteamLibrary\\steamapps\\common\\G-Rebels\\G_Rebels\\Binaries\\Win64\\G_Rebels-Win64-Shipping.exe",
-  "IconPath": "icon.png"
+  "IconPath": "icon.jpg"
 }
