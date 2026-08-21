@@ -42,6 +42,11 @@ class Config:
         "g_clamp": 6.0,
         "send_g_forces": True,
         "allow_fallback_offsets": True,
+        # Find the craft by walking pointers from the executable rather than
+        # by reading what an injected mod publishes. UE4SS cannot coexist with
+        # a VR runtime, so this is what makes telemetry work in the headset.
+        # Setting it False falls back to the UE4SS mod's file.
+        "use_pointer_chain": True,
         # Synthetic engine channels. G-Rebels has no engine, but AZOM drives
         # the AB9's buzz from Rpm/MaxRpm and its shift kick from Gear, so we
         # fabricate them from thrust and speed to get haptics out of hardware

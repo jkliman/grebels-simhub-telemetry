@@ -20,7 +20,7 @@ import struct
 import threading
 import time
 
-from . import calibrate, dr2, simdef
+from . import calibrate, dr2, resolve, simdef
 from .memory import Process, ProcessNotRunning
 
 GAME_PROCESS = "G_Rebels-Win64-Shipping.exe"
@@ -28,6 +28,8 @@ GRAVITY = 9.80665
 TARGET_FILENAME = "gr_target.txt"
 FIRE_IMPULSE_DECAY_S = 0.08
 GAMEPLAY_POLL_HZ = 200.0
+# How long the craft must stay unfindable before we call it a menu.
+MENU_AFTER_LOST_S = 2.0
 
 # Unreal property kind -> (struct code, byte width). BoolProperty is read as a
 # single byte: UE stores non-bitfield bools one per byte, and every bool we ask
@@ -128,6 +130,7 @@ class Status:
         self.ammo = 0.0
         self.heat = 0.0
         self.output_mode = ""
+        self.source = ""
 
     def update(self, **fields):
         with self._lock:
@@ -229,6 +232,9 @@ class Bridge:
         self._missiles_pending = 0.0
         self._last_shot_at = -99.0
         self._in_menu = False
+        self._resolver = None
+        self._source = "mod"
+        self._lost_since = None
         self._duplicate_ticks = 0
         self._clamped = 0
         self._ammo_seen_max = 0.0
@@ -270,33 +276,30 @@ class Bridge:
             self.status.update(state=Status.ERROR, detail=str(exc))
             return False
 
-        target_path = self.config.target_file
-        try:
-            target = read_target_file(target_path)
-        except OSError:
-            self.status.update(
-                state=Status.WAITING_FOR_MOD,
-                detail="no %s yet - load into a flight" % TARGET_FILENAME)
+        target = self._read_source()
+        if target is None:
             return False
 
-        if not target["root_addr"] or not target["loc"]:
-            self.status.update(state=Status.WAITING_FOR_MOD,
-                               detail="mod has not found your craft yet")
-            return False
-
-        self.status.update(state=Status.CALIBRATING,
-                           detail="locating fields in memory")
-        try:
-            offsets = calibrate.calibrate(self._process, target)
-        except calibrate.CalibrationError as exc:
-            if self.config.allow_fallback_offsets:
-                offsets = {"location": calibrate.FALLBACK_LOCATION,
-                           "rotation": calibrate.FALLBACK_ROTATION,
-                           "world_time": calibrate.FALLBACK_WORLD_TIME}
-                self.status.update(detail="calibration fell back to known offsets (%s)" % exc)
-            else:
-                self.status.update(state=Status.ERROR, detail=str(exc))
-                return False
+        if target.get("offsets"):
+            # The pointer chain arrives with its offsets already known: they
+            # are the same layout facts the routes themselves depend on, so
+            # there is nothing left to calibrate.
+            offsets = target["offsets"]
+        else:
+            self.status.update(state=Status.CALIBRATING,
+                               detail="locating fields in memory")
+            try:
+                offsets = calibrate.calibrate(self._process, target)
+            except calibrate.CalibrationError as exc:
+                if self.config.allow_fallback_offsets:
+                    offsets = {"location": calibrate.FALLBACK_LOCATION,
+                               "rotation": calibrate.FALLBACK_ROTATION,
+                               "world_time": calibrate.FALLBACK_WORLD_TIME}
+                    self.status.update(
+                        detail="calibration fell back to known offsets (%s)" % exc)
+                else:
+                    self.status.update(state=Status.ERROR, detail=str(exc))
+                    return False
 
         self._offsets = offsets
         self._root = target["root_addr"]
@@ -307,15 +310,73 @@ class Bridge:
         with self._lock:
             self._samples.clear()
         self.status.update(state=Status.STREAMING, craft=self._craft,
-                           offsets=offsets, detail="")
+                           offsets=offsets, source=self._source, detail="")
         return True
 
-    def _refresh_target(self):
-        """Pick up a new craft after death, respawn or level change."""
+    # -- where the craft's address comes from --------------------------------
+    def _read_source(self):
+        """Locate the craft, preferring the pointer chain over the UE4SS mod.
+
+        Two ways in, and the order matters. Walking pointers needs nothing
+        installed in the game, which is the only way telemetry and VR can both
+        run; the mod's file is kept as a fallback for a build whose offsets
+        have moved. Whichever answers first wins, and the status line says
+        which one it was so a silent downgrade is visible.
+        """
+        if self.config.use_pointer_chain:
+            try:
+                if self._resolver is None:
+                    self._resolver = resolve.Resolver(self._process)
+                snapshot = self._resolver.snapshot()
+                self._source = "pointer chain"
+                return snapshot
+            except resolve.ResolveError as exc:
+                chain_problem = str(exc)
+            except Exception as exc:                  # a wrong offset, a dead handle
+                chain_problem = "%s: %s" % (type(exc).__name__, exc)
+        else:
+            chain_problem = "disabled in settings"
+
         try:
             target = read_target_file(self.config.target_file)
         except OSError:
-            return
+            self.status.update(
+                state=Status.WAITING_FOR_MOD,
+                detail=chain_problem if self.config.use_pointer_chain
+                else "no %s yet - load into a flight" % TARGET_FILENAME)
+            return None
+
+        if not target["root_addr"] or not target["loc"]:
+            self.status.update(state=Status.WAITING_FOR_MOD,
+                               detail="waiting for a craft (%s)" % chain_problem)
+            return None
+        self._source = "UE4SS mod"
+        return target
+
+    def _refresh_target(self):
+        """Pick up a new craft after death, respawn or level change."""
+        if self.config.use_pointer_chain and self._resolver is not None:
+            try:
+                target = self._resolver.snapshot()
+                self._lost_since = None
+                self._in_menu = False
+            except Exception:
+                # Mid-respawn the routes disagree on purpose. Keep flying the
+                # last known craft rather than lurching; the next refresh will
+                # pick it up once the game has made up its mind. If the craft
+                # stays gone we are in a menu, and the packet should say so --
+                # a motion rig should settle, not hold the last attitude.
+                now = time.monotonic()
+                if self._lost_since is None:
+                    self._lost_since = now
+                elif now - self._lost_since > MENU_AFTER_LOST_S:
+                    self._in_menu = True
+                return
+        else:
+            try:
+                target = read_target_file(self.config.target_file)
+            except OSError:
+                return
         root = target["root_addr"]
         if root and root != self._root:
             self._root = root

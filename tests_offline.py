@@ -2,6 +2,7 @@
 
 import math
 import os
+import struct
 import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "src"))
@@ -293,6 +294,128 @@ check("candidates are unique", len(_ss.candidate_simhub_dirs()) ==
 check("a folder without SimHubWPF.exe is not SimHub",
       not _ss.looks_like_simhub(os.path.dirname(os.path.abspath(__file__))))
 check("empty path is not SimHub", not _ss.looks_like_simhub(""))
+
+print("finding the craft without UE4SS")
+from grebels_telemetry import resolve as _rs
+
+
+class FakeProcess:
+    """Just enough of a process to walk pointers through: a sparse address map.
+
+    Reads that fall outside anything written return None, exactly as
+    ReadProcessMemory does for unmapped pages -- which is the case the resolver
+    has to survive, so the fake must not paper over it.
+    """
+
+    MODULE_BASE = 0x140000000
+    MODULE_SIZE = 0x1000000
+
+    def __init__(self):
+        self.memory = {}
+
+    def module_range(self, name=None):
+        return self.MODULE_BASE, self.MODULE_SIZE
+
+    def put_pointer(self, address, value):
+        self.memory[address] = struct.pack("<Q", value)
+
+    def put(self, address, raw):
+        self.memory[address] = raw
+
+    def read(self, address, size):
+        raw = self.memory.get(address)
+        if raw is None or len(raw) < size:
+            return None
+        return raw[:size]
+
+    def read_double(self, address):
+        raw = self.read(address, 8)
+        return struct.unpack("<d", raw)[0] if raw else None
+
+
+def build_world(pawn_via_controller, pawn_via_world_slot, pawn_via_ack=None):
+    """A world with a controller and the three routes pointed wherever we like."""
+    fake = FakeProcess()
+    world, controller, host = 0x2000_0000, 0x3000_0000, 0x4000_0000
+    fake.put_pointer(fake.MODULE_BASE + _rs.GWORLD_RVA, world)
+    fake.put_pointer(world + 0x58, host)
+    fake.put_pointer(host + 0x958, controller)
+    fake.put_pointer(controller + 0x2E8, pawn_via_controller)
+    fake.put_pointer(controller + 0x350,
+                     pawn_via_ack if pawn_via_ack is not None else pawn_via_controller)
+    fake.put_pointer(world + 0x1A8, 0x5000_0000)
+    fake.put_pointer(0x5000_0000 + 0x3E8, pawn_via_world_slot)
+    fake.put_double = None
+    return fake, world
+
+
+def make_craft(fake, pawn, root, x=100.0):
+    """Give an address everything vouch() insists on before believing it."""
+    fake.put_pointer(pawn, fake.MODULE_BASE + 0x1234)          # vtable
+    fake.put_pointer(pawn + _rs.ROOT_COMPONENT_OFFSET, root)
+    fake.put_pointer(root, fake.MODULE_BASE + 0x5678)          # vtable
+    fake.put(root + _rs.LOCATION_OFFSET, struct.pack("<3d", x, 2.0, 3.0))
+    fake.put(root + _rs.ROTATION_OFFSET, struct.pack("<3d", 0.0, 0.0, 0.0))
+
+
+real, other = 0x6000_0000, 0x7000_0000
+fake, world = build_world(real, real)
+make_craft(fake, real, 0x6100_0000)
+resolver = _rs.Resolver(fake)
+check("walks to the craft everything agrees on", resolver.pawn(world) == real)
+
+# The observed respawn glitch: the controller's field is briefly empty, one
+# route still names the destroyed craft, and a third holds ASCII spaces.
+fake, world = build_world(0, other, 0)
+make_craft(fake, other, 0x7100_0000)
+fake.put(0x0202020202020202, b" " * 64)
+resolver = _rs.Resolver(fake)
+check("will not name a craft on one witness alone", resolver.pawn(world) is None)
+
+# A pointer into memory that is mapped but is not an object at all.
+fake, world = build_world(0x9999_0000, 0x9999_0000)
+fake.put_pointer(0x9999_0000, 0x0202020202020202)          # not a vtable
+resolver = _rs.Resolver(fake)
+check("rejects a pointer whose vtable is not in the module",
+      resolver.pawn(world) is None)
+
+# A craft whose position is nonsense is not a craft.
+fake, world = build_world(real, real)
+make_craft(fake, real, 0x6100_0000, x=float("inf"))
+resolver = _rs.Resolver(fake)
+check("rejects an impossible position", resolver.pawn(world) is None)
+
+# Switching craft needs to be seen twice, but the first craft is taken at once.
+fake, world = build_world(real, real)
+make_craft(fake, real, 0x6100_0000)
+make_craft(fake, other, 0x7100_0000)
+resolver = _rs.Resolver(fake)
+check("first craft is accepted immediately", resolver.pawn(world) == real)
+fake.put_pointer(0x3000_0000 + 0x2E8, other)
+fake.put_pointer(0x3000_0000 + 0x350, other)
+fake.put_pointer(0x5000_0000 + 0x3E8, other)
+check("a new craft is held for one reading", resolver.pawn(world) == real)
+check("and taken on the next", resolver.pawn(world) == other)
+
+fake, world = build_world(real, real)
+make_craft(fake, real, 0x6100_0000)
+fake.put(0x2000_0000 + _rs.WORLD_TIME_OFFSET, struct.pack("<d", 12.5))
+resolver = _rs.Resolver(fake)
+snapshot = resolver.snapshot()
+check("snapshot carries the clock and the transform",
+      abs(snapshot["time_seconds"] - 12.5) < 1e-9
+      and snapshot["root_addr"] == 0x6100_0000
+      and snapshot["loc"][0] == 100.0)
+check("snapshot brings its own offsets, so nothing needs calibrating",
+      snapshot["offsets"]["location"] == _rs.LOCATION_OFFSET)
+
+fake, world = build_world(0, 0)
+resolver = _rs.Resolver(fake)
+try:
+    resolver.snapshot()
+    check("an empty world is an error, not a guess", False)
+except _rs.ResolveError:
+    check("an empty world is an error, not a guess", True)
 
 print()
 if failures:
