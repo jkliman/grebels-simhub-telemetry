@@ -35,16 +35,105 @@ class SetupError(RuntimeError):
 
 
 # ------------------------------------------------------------- locating it --
+UNINSTALL_KEYS = (
+    r"SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall",
+    r"SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall",
+)
+
+
 def candidate_simhub_dirs():
-    seen, out = set(), []
-    for env in ("ProgramFiles(x86)", "ProgramFiles"):
-        root = os.environ.get(env)
+    """Every place SimHub might be, best guess first.
+
+    Do not trust %ProgramFiles(x86)%: it is genuinely absent in some processes
+    -- it was missing from the very Python that shipped this, which made the
+    probe skip the one directory SimHub was actually in and report "not found"
+    while SimHub was running. SystemDrive is used as a backstop for that.
+    """
+    out = []
+
+    def add(path):
+        if path and path not in out:
+            out.append(path)
+
+    for root in (os.environ.get("ProgramFiles(x86)"),
+                 os.environ.get("ProgramFiles"),
+                 os.path.join(os.environ.get("SystemDrive", "C:") + os.sep,
+                              "Program Files (x86)"),
+                 os.path.join(os.environ.get("SystemDrive", "C:") + os.sep,
+                              "Program Files")):
         if root:
-            path = os.path.join(root, "SimHub")
-            if path not in seen:
-                seen.add(path)
-                out.append(path)
+            add(os.path.join(root, "SimHub"))
     return out
+
+
+def simhub_dir_from_registry():
+    """SimHub's own uninstall entry records where it lives.
+
+    Several entries mention SimHub (a screen driver, for one), so every
+    candidate is validated by looking for the executable rather than trusted
+    on its name.
+    """
+    try:
+        import winreg
+    except ImportError:
+        return ""
+
+    for hive, view in ((winreg.HKEY_LOCAL_MACHINE, 0),
+                       (winreg.HKEY_CURRENT_USER, 0)):
+        for base in UNINSTALL_KEYS:
+            try:
+                key = winreg.OpenKey(hive, base, 0, winreg.KEY_READ | view)
+            except OSError:
+                continue
+            try:
+                for index in range(winreg.QueryInfoKey(key)[0]):
+                    try:
+                        name = winreg.EnumKey(key, index)
+                        with winreg.OpenKey(key, name) as sub:
+                            location, _ = winreg.QueryValueEx(sub, "InstallLocation")
+                    except OSError:
+                        continue
+                    location = (location or "").strip().rstrip("\\/")
+                    if location and looks_like_simhub(location):
+                        return location
+            finally:
+                key.Close()
+    return ""
+
+
+def simhub_dir_from_process():
+    """Where the running SimHub was launched from. Unambiguous when available."""
+    pid = _simhub_pid()
+    if pid is None:
+        return ""
+    try:
+        import ctypes
+        from ctypes import wintypes as W
+    except ImportError:
+        return ""
+
+    class _ME(ctypes.Structure):
+        _fields_ = [("dwSize", W.DWORD), ("th32ModuleID", W.DWORD),
+                    ("th32ProcessID", W.DWORD), ("GlblcntUsage", W.DWORD),
+                    ("ProccntUsage", W.DWORD),
+                    ("modBaseAddr", ctypes.c_void_p), ("modBaseSize", W.DWORD),
+                    ("hModule", W.HMODULE), ("szModule", ctypes.c_char * 256),
+                    ("szExePath", ctypes.c_char * 260)]
+
+    k32 = ctypes.windll.kernel32
+    snap = k32.CreateToolhelp32Snapshot(0x00000008 | 0x00000010, pid)
+    if snap == -1:
+        return ""
+    entry = _ME()
+    entry.dwSize = ctypes.sizeof(_ME)
+    path = ""
+    try:
+        if k32.Module32First(snap, ctypes.byref(entry)):
+            path = entry.szExePath.decode(errors="ignore")
+    finally:
+        k32.CloseHandle(snap)
+    folder = os.path.dirname(path)
+    return folder if looks_like_simhub(folder) else ""
 
 
 def looks_like_simhub(path):
@@ -53,6 +142,13 @@ def looks_like_simhub(path):
 
 
 def find_simhub_dir():
+    """Layered, because no single method is reliable on its own."""
+    found = simhub_dir_from_registry()
+    if found:
+        return found
+    found = simhub_dir_from_process()
+    if found:
+        return found
     for path in candidate_simhub_dirs():
         if looks_like_simhub(path):
             return path
@@ -74,11 +170,15 @@ def definitions_dir():
 
 def simhub_is_running():
     """AZOM's DLL cannot be replaced while SimHub holds it open."""
+    return _simhub_pid() is not None
+
+
+def _simhub_pid():
     try:
         import ctypes
         from ctypes import wintypes as W
     except ImportError:
-        return False
+        return None
 
     TH32CS_SNAPPROCESS = 0x0002
 
@@ -94,22 +194,22 @@ def simhub_is_running():
     k32 = ctypes.windll.kernel32
     snap = k32.CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0)
     if snap == -1:
-        return False
+        return None
     entry = _PE()
     entry.dwSize = ctypes.sizeof(_PE)
-    found = False
+    pid = None
     try:
         if k32.Process32First(snap, ctypes.byref(entry)):
             while True:
                 name = entry.szExeFile.decode(errors="ignore").lower()
                 if name == SIMHUB_PROCESS.lower():
-                    found = True
+                    pid = entry.th32ProcessID
                     break
                 if not k32.Process32Next(snap, ctypes.byref(entry)):
                     break
     finally:
         k32.CloseHandle(snap)
-    return found
+    return pid
 
 
 # ------------------------------------------------------- the definition ----

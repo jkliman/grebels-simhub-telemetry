@@ -277,6 +277,19 @@ _rejects([("MozaPlugin.dll", b"XX" + b"\x00" * (400 * 1024))],
          "rejects a file that is not a Windows binary")
 
 print("simhub discovery")
+# %ProgramFiles(x86)% is genuinely absent in some processes -- it was missing
+# from the Python that shipped this, so the probe skipped the one directory
+# SimHub was in and reported "not found" while SimHub was running.
+_saved = os.environ.pop("ProgramFiles(x86)", None)
+try:
+    cands = _ss.candidate_simhub_dirs()
+    check("still finds a Program Files (x86) candidate without the env var",
+          any("Program Files (x86)" in c for c in cands), cands)
+finally:
+    if _saved is not None:
+        os.environ["ProgramFiles(x86)"] = _saved
+check("candidates are unique", len(_ss.candidate_simhub_dirs()) ==
+      len(set(_ss.candidate_simhub_dirs())))
 check("a folder without SimHubWPF.exe is not SimHub",
       not _ss.looks_like_simhub(os.path.dirname(os.path.abspath(__file__))))
 check("empty path is not SimHub", not _ss.looks_like_simhub(""))
