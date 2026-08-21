@@ -1,0 +1,6 @@
+Fetching the WiX 3.14 toolset...
+Building version 0.1.0
+MSI ProductVersion 0.1.0
+Product.wxs
+C:\Users\jklim\Downloads\grebels-simhub-telemetry\installer\Product.wxs(46) : error LGHT0091 : Duplicate symbol 'Property:SIMHUBDIR' found. This typically means that an Id is duplicated. Check to make sure all your identifiers of a given type (File, Component, Feature) are unique.
+C:\Users\jklim\Downloads\grebels-simhub-telemetry\installer\Product.wxs(51) : error LGHT0092 : Location of symbol related to previous error.

@@ -35,22 +35,21 @@
     <MajorUpgrade DowngradeErrorMessage="A newer version of G-Rebels Telemetry is already installed." />
     <MediaTemplate EmbedCab="yes" />
 
-    <Icon Id="AppIcon" SourceFile="$(var.IconFile)" />
-    <Property Id="ARPPRODUCTICON" Value="AppIcon" />
+    <Icon Id="AppIcon.ico" SourceFile="$(var.IconFile)" />
+    <Property Id="ARPPRODUCTICON" Value="AppIcon.ico" />
     <Property Id="ARPURLINFOABOUT" Value="https://github.com/jkliman/grebels-simhub-telemetry" />
     <Property Id="WIXUI_INSTALLDIR" Value="INSTALLFOLDER" />
 
     <!-- Default the SimHub box by looking for the executable, not the folder
          name: an empty "SimHub" directory left behind by an uninstall would
          otherwise pass for an install. -->
+    <!-- One search only: WiX rejects a duplicated Property id. SimHub is a
+         32-bit application, so [ProgramFilesFolder] on this x86 package is
+         where it actually lives. If it sits elsewhere the user browses to
+         it, and grsetup.exe probes both Program Files roots on its own. -->
     <Property Id="SIMHUBDIR">
-      <DirectorySearch Id="SimHubX86" Path="[ProgramFilesFolder]SimHub">
-        <FileSearch Id="SimHubExeX86" Name="SimHubWPF.exe" />
-      </DirectorySearch>
-    </Property>
-    <Property Id="SIMHUBDIR">
-      <DirectorySearch Id="SimHub64" Path="[ProgramFiles64Folder]SimHub">
-        <FileSearch Id="SimHubExe64" Name="SimHubWPF.exe" />
+      <DirectorySearch Id="SimHubSearch" Path="[ProgramFilesFolder]SimHub">
+        <FileSearch Id="SimHubExe" Name="SimHubWPF.exe" />
       </DirectorySearch>
     </Property>
 
@@ -78,7 +77,7 @@
                     Directory="AppShortcutFolder"
                     Name="G-Rebels Telemetry"
                     Description="Stream G-Rebels flight data to SimHub"
-                    Icon="AppIcon"
+                    Icon="AppIcon.ico"
                     Advertise="yes" />
         </File>
       </Component>
@@ -143,7 +142,7 @@
                  Transparent="yes" NoPrefix="yes"
                  Text="Where SimHub is installed, and whether to add AB9 flight stick support." />
         <Control Id="BannerBitmap" Type="Bitmap" X="0" Y="0" Width="370" Height="44"
-                 TabSkip="no" Text="!(loc.SimHubDlgBannerBitmap)" />
+                 TabSkip="no" Text="WixUI_Bmp_Banner" />
         <Control Id="BannerLine" Type="Line" X="0" Y="44" Width="370" Height="0" />
         <Control Id="BottomLine" Type="Line" X="0" Y="234" Width="370" Height="0" />
 
@@ -153,7 +152,7 @@
         <Control Id="FolderEdit" Type="PathEdit" X="20" Y="86" Width="252" Height="18"
                  Property="SIMHUBDIR" Indirect="no" />
         <Control Id="BrowseButton" Type="PushButton" X="276" Y="85" Width="66" Height="19"
-                 Text="!(loc.WixUIBrowse)">
+                 Text="Br&amp;owse...">
           <Publish Property="_BrowseProperty" Value="SIMHUBDIR" Order="1">1</Publish>
           <Publish Event="SpawnDialog" Value="BrowseDlg" Order="2">1</Publish>
         </Control>
