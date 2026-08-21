@@ -1,0 +1,5 @@
+Building version 0.2.0
+MSI ProductVersion 0.2.0
+Product.wxs
+C:\Users\jklim\Downloads\grebels-simhub-telemetry\installer\Product.wxs(67) : error CNDL0006 : The Property/@Value attribute's value cannot be an empty string. If a value is not required, simply remove the entire attribute.
+C:\Users\jklim\Downloads\grebels-simhub-telemetry\installer\Product.wxs(67) : warning CNDL1006 : Property 'GAMEDIR' does not contain a Value attribute and is not marked as Admin, Secure, or Hidden.  The Property element is being ignored.

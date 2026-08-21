@@ -64,7 +64,7 @@
          libraryfolders.vdf — the registry is no use, because Steam writes an
          uninstall key for the game but leaves InstallLocation empty. -->
     <Property Id="INSTALLGAME" Value="1" />
-    <Property Id="GAMEDIR" Value="" />
+    <Property Id="GAMEDIR" Secure="yes" />
 
     <Directory Id="TARGETDIR" Name="SourceDir">
       <Directory Id="ProgramFilesFolder">
