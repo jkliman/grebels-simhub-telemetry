@@ -178,6 +178,30 @@ local function publish()
     file:write(string.format("pawn_addr=%X\n", pawn:GetAddress()))
     file:write(string.format("root_addr=%X\n", root:GetAddress()))
     file:write(string.format("world_addr=%X\n", worldAddress))
+    -- Landmarks for the offset hunt: knowing which object a pointer route
+    -- passes through is what tells us whether the route is meaningful or a
+    -- coincidence that will break the next time the craft respawns.
+    file:write(string.format("controller_addr=%X\n", controller:GetAddress()))
+    local acknowledged = try(function() return controller.AcknowledgedPawn end)
+    if acknowledged and acknowledged:IsValid() then
+        file:write(string.format("acknowledged_addr=%X\n", acknowledged:GetAddress()))
+    end
+    local player = try(function() return controller.Player end)
+    if player and player:IsValid() then
+        file:write(string.format("localplayer_addr=%X\n", player:GetAddress()))
+    end
+    local camera = try(function() return controller.PlayerCameraManager end)
+    if camera and camera:IsValid() then
+        file:write(string.format("camera_addr=%X\n", camera:GetAddress()))
+    end
+    local state = try(function() return controller.PlayerState end)
+    if state and state:IsValid() then
+        file:write(string.format("playerstate_addr=%X\n", state:GetAddress()))
+    end
+    local instance = try(function() return UEHelpers.GetGameInstance() end)
+    if instance and instance:IsValid() then
+        file:write(string.format("gameinstance_addr=%X\n", instance:GetAddress()))
+    end
     file:write(string.format("time_seconds=%.6f\n", timeSeconds))
     writeTriple(file, "loc", readVector(try(function() return pawn:K2_GetActorLocation() end)))
     writeTriple(file, "rot", readRotator(try(function() return pawn:K2_GetActorRotation() end)))

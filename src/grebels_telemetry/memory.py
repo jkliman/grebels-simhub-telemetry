@@ -121,7 +121,15 @@ class Process:
     def is_alive(self):
         return find_pid(self.exe_name) == self.pid
 
-    def module_base(self, module_name=None):
+    def module_range(self, module_name=None):
+        """(base, size) of a loaded module, or None. Sizes matter for deciding
+        whether a pointer is a vtable in the executable or just a number."""
+        entry = self._find_module(module_name)
+        if entry is None:
+            return None
+        return int(entry.modBaseAddr), int(entry.modBaseSize)
+
+    def _find_module(self, module_name=None):
         module_name = (module_name or self.exe_name).lower()
         k32 = self.k32
         snap = k32.CreateToolhelp32Snapshot(TH32CS_SNAPMODULE, self.pid)
@@ -129,15 +137,17 @@ class Process:
             return None
         entry = _ModuleEntry()
         entry.dwSize = ctypes.sizeof(_ModuleEntry)
-        base = None
         try:
             if k32.Module32First(snap, ctypes.byref(entry)):
                 while True:
                     if entry.szModule.decode(errors="ignore").lower() == module_name:
-                        base = entry.modBaseAddr
-                        break
+                        return entry
                     if not k32.Module32Next(snap, ctypes.byref(entry)):
                         break
         finally:
             k32.CloseHandle(snap)
-        return base
+        return None
+
+    def module_base(self, module_name=None):
+        entry = self._find_module(module_name)
+        return entry.modBaseAddr if entry is not None else None

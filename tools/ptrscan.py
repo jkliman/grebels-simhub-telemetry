@@ -300,6 +300,104 @@ def walk(process, base, rva, offsets):
     return address or None
 
 
+def walk_verbose(process, base, rva, offsets):
+    """Like walk(), but return every address along the way."""
+    hops = []
+    raw = process.read(base + rva, 8)
+    if raw is None:
+        return hops
+    address = struct.unpack("<Q", raw)[0]
+    hops.append(address)
+    for offset in offsets:
+        if not address:
+            return hops
+        raw = process.read(address + offset, 8)
+        if raw is None:
+            return hops
+        address = struct.unpack("<Q", raw)[0]
+        hops.append(address)
+    return hops
+
+
+def scan_object(process, address, value, span=0x3000):
+    """Offsets within an object whose qword equals `value`."""
+    raw = process.read(address, span)
+    if raw is None:
+        for smaller in (0x2000, 0x1000, 0x800):
+            raw = process.read(address, smaller)
+            if raw is not None:
+                span = smaller
+                break
+    if raw is None:
+        return []
+    needle = struct.pack("<Q", value)
+    out = []
+    start = 0
+    while True:
+        found = raw.find(needle, start)
+        if found < 0:
+            break
+        if found % 8 == 0:
+            out.append(found)
+        start = found + 1
+    return out
+
+
+def anatomy(process, values, world, pawn):
+    """Locate everything the bridge needs, relative to the pawn and the world."""
+    root = address_of(values, "root_addr")
+    if root:
+        hits = scan_object(process, pawn, root)
+        print("RootComponent inside the pawn: %s"
+              % (", ".join("+0x%X" % h for h in hits) or "not found"))
+
+    try:
+        expected = float(values.get("time_seconds", "nan"))
+    except ValueError:
+        expected = float("nan")
+    if expected == expected and expected > 0:
+        raw = process.read(world, 0x800)
+        if raw is not None:
+            hits = []
+            for offset in range(0, len(raw) - 8 + 1, 8):
+                candidate = struct.unpack_from("<d", raw, offset)[0]
+                if abs(candidate - expected) < 0.25:
+                    hits.append((offset, candidate))
+            print("TimeSeconds inside the world (UE4SS says %.3f): %s"
+                  % (expected, ", ".join("+0x%X=%.3f" % h for h in hits)
+                     or "not found"))
+
+    for key in ("controller_addr", "localplayer_addr", "camera_addr",
+                "playerstate_addr", "gameinstance_addr"):
+        other = address_of(values, key)
+        if not other:
+            continue
+        holds = scan_object(process, other, pawn)
+        print("%-18s 0x%X holds the pawn at %s"
+              % (key, other, ", ".join("+0x%X" % h for h in holds) or "no offset"))
+        back = scan_object(process, pawn, other, span=0x2000)
+        if back:
+            print("%-18s   ...and the pawn points back at it from %s"
+                  % ("", ", ".join("+0x%X" % h for h in back)))
+
+    for key in ("loc", "rot", "vel"):
+        raw = values.get(key)
+        if not raw or raw == "nil" or not root:
+            continue
+        wanted = [float(part) for part in raw.split(",")]
+        block = process.read(root, 0x400)
+        if block is None:
+            continue
+        hits = []
+        for offset in range(0, len(block) - 24 + 1, 8):
+            triple = struct.unpack_from("<3d", block, offset)
+            if all(abs(a - b) < 1.0 for a, b in zip(triple, wanted)):
+                hits.append(offset)
+        print("%s inside the root component: %s"
+              % (key, ", ".join("+0x%X (%d)" % (h, h) for h in hits)
+                 or "not found"))
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--target", default=os.path.join(
@@ -309,7 +407,14 @@ def main():
     parser.add_argument("--gworld-rva", type=lambda s: int(s, 16), default=None,
                         help="skip the module scan and use this RVA")
     parser.add_argument("--verify", default=None,
-                        help="a route to check, as RVA:off:off:... in hex")
+                        help="routes to check, as RVA:off:off (comma-separated)")
+    parser.add_argument("--goal", default="pawn_addr",
+                        help="which address from the target file to search for")
+    parser.add_argument("--anatomy", action="store_true",
+                        help="locate the pieces the bridge needs inside the "
+                             "pawn and the world")
+    parser.add_argument("--watch", type=float, default=0.0,
+                        help="keep re-checking for this many seconds")
     args = parser.parse_args()
 
     process = memory.Process(EXE)
@@ -321,13 +426,29 @@ def main():
     print("pid %d, module 0x%X size 0x%X" % (process.pid, base, size))
 
     if args.verify:
-        parts = [int(p, 16) for p in args.verify.split(":")]
-        landed = walk(process, base, parts[0], parts[1:])
-        print("route lands on %s" % ("0x%X" % landed if landed else "nothing"))
-        values = read_target_file(args.target) if os.path.exists(args.target) else {}
-        pawn = address_of(values, "pawn_addr")
-        if pawn:
-            print("UE4SS says pawn 0x%X -> %s" % (pawn, "MATCH" if pawn == landed else "MISS"))
+        routes = [[int(p, 16) for p in route.split(":")]
+                  for route in args.verify.split(",")]
+        deadline = time.time() + max(args.watch, 0)
+        while True:
+            values = (read_target_file(args.target)
+                      if os.path.exists(args.target) else {})
+            pawn = address_of(values, "pawn_addr")
+            stamp = time.strftime("%H:%M:%S")
+            for route in routes:
+                hops = walk_verbose(process, base, route[0], route[1:])
+                landed = hops[-1] if hops else None
+                trail = " -> ".join("0x%X" % h for h in hops)
+                verdict = "?"
+                if pawn:
+                    verdict = "MATCH" if landed == pawn else "MISS"
+                print("%s  %-28s %s  [%s]"
+                      % (stamp, describe(base, route[0], route[1:]), trail, verdict))
+            if pawn:
+                print("%s  UE4SS pawn 0x%X" % (stamp, pawn))
+            if time.time() >= deadline:
+                break
+            print("")
+            time.sleep(2.0)
         return 0
 
     values = read_target_file(args.target)
@@ -337,6 +458,10 @@ def main():
         print("need world_addr and pawn_addr in %s" % args.target)
         return 2
     print("UE4SS: world 0x%X pawn 0x%X" % (world, pawn))
+
+    if args.anatomy:
+        anatomy(process, values, world, pawn)
+        return 0
 
     started = time.time()
     space = Space(process)
@@ -361,7 +486,9 @@ def main():
 
     walker = Walker(process, space, base, size)
     started = time.time()
-    routes = walker.search([(world, "object")], pawn, max_depth=args.max_depth)
+    goal = address_of(values, args.goal) or pawn
+    print("searching for %s = 0x%X" % (args.goal, goal))
+    routes = walker.search([(world, "object")], goal, max_depth=args.max_depth)
     print("search took %.1fs, %d route(s)" % (time.time() - started, len(routes)))
     if not routes:
         print("no route from the world to the pawn within depth %d" % args.max_depth)
@@ -372,7 +499,7 @@ def main():
     for offsets in routes[:40]:
         for rva in roots_rva[:4]:
             landed = walk(process, base, rva, offsets)
-            mark = "OK " if landed == pawn else "   "
+            mark = "OK " if landed == goal else "   "
             print("  %s%s" % (mark, describe(base, rva, offsets)))
     print("")
     print("re-check one with:  py -3 tools/ptrscan.py --verify %X:%s"
