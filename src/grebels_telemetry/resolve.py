@@ -24,13 +24,23 @@ import struct
 # and confirmed to be the only match, unchanged across restarts.
 GWORLD_RVA = 0x9C865B0
 
-# Two hops from the world to the pawn. Each entry is a chain of offsets to
-# follow; they were discovered by search and kept only after surviving a
-# restart. They are walked together and voted on.
+# Routes from the world down to the pawn, best first.
+#
+# The first one is the meaningful one: two hops reach the APlayerController --
+# confirmed by checking the address against the controller UE4SS reports -- and
+# Controller::Pawn is the same field the UE4SS mod was reading all along. The
+# second starts from a different slot in the world and arrives independently,
+# so it can corroborate the first without sharing its failure modes.
+#
+# Earlier drafts also used a route through UWorld+0xC20. It agreed for two
+# whole sessions and then, in the third, resolved to a run of ASCII spaces.
+# That slot is not an object pointer; it just happened to hold one twice. Any
+# route kept here has survived a restart, a death and a fresh flight.
+CONTROLLER_ROUTE = (0x58, 0x958)     # -> APlayerController
 ROUTES = (
-    (0x1A8, 0x3E8),
-    (0xC20, 0x320),
-    (0xC20, 0xB20),
+    ("controller.Pawn", (0x58, 0x958, 0x2E8)),
+    ("world.player", (0x1A8, 0x3E8)),
+    ("controller.AcknowledgedPawn", (0x58, 0x958, 0x350)),
 )
 
 ROOT_COMPONENT_OFFSET = 0x1B8    # AActor::RootComponent
@@ -86,16 +96,21 @@ def _qword(process, address):
 class Resolver:
     """Walks the pointer routes and vouches for what it finds."""
 
-    def __init__(self, process, gworld_rva=GWORLD_RVA, routes=ROUTES):
+    def __init__(self, process, gworld_rva=GWORLD_RVA, routes=ROUTES,
+                 min_witnesses=2):
         self.process = process
         self.gworld_rva = gworld_rva
         self.routes = tuple(routes)
+        self.min_witnesses = min_witnesses
         found = process.module_range()
         if not found:
             raise ResolveError("could not locate the game module")
         self.module_base, self.module_size = found
         self.module_end = self.module_base + self.module_size
         self.last_votes = ()
+        self._accepted = None
+        self._pending = None
+        self._pending_count = 0
 
     # -- checks -------------------------------------------------------------
     def _is_object(self, address):
@@ -145,22 +160,75 @@ class Resolver:
         return address
 
     def pawn(self, world):
-        """The address the most routes agree on, or None.
+        """The address two independent witnesses agree on, or None.
 
-        Ties go to whichever candidate passes vouch(); if several do, the one
-        with the most votes wins. Requiring agreement is what stops a single
-        stale route from quietly steering the whole bridge at a dead craft.
+        Routes that share their first hop pass through the same object, so
+        they are one witness, not two -- counting them separately would let a
+        single stale object outvote the truth. Witnesses are therefore counted
+        by distinct starting offsets.
+
+        This matters at respawn. Watching a death live, one witness kept
+        pointing at the craft that had just been destroyed while the other
+        briefly returned uninitialised memory. Either one alone would have been
+        believed. Requiring both to agree turns that moment into an honest "I
+        do not know" for about a second, which the bridge can ride out, instead
+        of a second and a half of telemetry from a corpse.
         """
         votes = {}
-        for offsets in self.routes:
+        primary = None
+        for index, (_name, offsets) in enumerate(self.routes):
             candidate = self._follow(world, offsets)
-            if candidate:
-                votes[candidate] = votes.get(candidate, 0) + 1
-        self.last_votes = tuple(sorted(votes.items(), key=lambda kv: -kv[1]))
-        for candidate, _count in self.last_votes:
+            if not candidate:
+                continue
+            if index == 0:
+                primary = candidate
+            # Routes sharing a first hop pass through the same object, so they
+            # are one witness however many of them there are.
+            votes.setdefault(candidate, set()).add(offsets[0])
+        ranked = sorted(votes.items(), key=lambda kv: -len(kv[1]))
+        self.last_votes = tuple((address, len(heads)) for address, heads in ranked)
+
+        # The controller's own Pawn field is the game's answer to this
+        # question, so it wins whenever it points at something real.
+        if primary and self.vouch(primary):
+            return self._settle(primary)
+
+        for candidate, heads in ranked:
+            if len(heads) < self.min_witnesses:
+                break
             if self.vouch(candidate):
-                return candidate
+                return self._settle(candidate)
+        self._pending = None
+        self._pending_count = 0
         return None
+
+    def controller(self, world):
+        """The APlayerController, for diagnostics."""
+        return self._follow(world, CONTROLLER_ROUTE)
+
+    def _settle(self, candidate):
+        """Hold a new craft for one extra reading before believing in it.
+
+        The routes are read one at a time, not atomically, so a swap landing
+        mid-walk can briefly produce a coherent-looking wrong answer. Seeing
+        the same address twice costs a few hundred milliseconds at respawn and
+        removes that whole class of glitch.
+        """
+        if candidate == self._accepted:
+            self._pending = None
+            self._pending_count = 0
+            return candidate
+        if candidate == self._pending:
+            self._pending_count += 1
+        else:
+            self._pending = candidate
+            self._pending_count = 1
+        if self._pending_count >= 2 or self._accepted is None:
+            self._accepted = candidate
+            self._pending = None
+            self._pending_count = 0
+            return candidate
+        return self._accepted if self.vouch(self._accepted) else None
 
     def snapshot(self):
         """The same shape the UE4SS mod publishes, read straight from memory."""

@@ -245,8 +245,15 @@ class Walker:
                 out.append((offset, value))
         return out
 
-    def search(self, roots, goal, max_depth=5, node_budget=400000):
-        """Return every route from a root to `goal`, shortest first."""
+    def search(self, roots, goal, max_depth=5, node_budget=400000,
+               keep_going=False):
+        """Return every route from a root to `goal`, shortest first.
+
+        By default the search stops at the first depth that yields anything,
+        because deeper routes through the same objects add no independence.
+        `keep_going` collects every depth instead, which is what you want when
+        you are looking for genuinely separate witnesses.
+        """
         found = []
         frontier = [(address, kind, (address,), ()) for address, kind in roots]
         seen = {address for address, _ in roots}
@@ -269,7 +276,7 @@ class Walker:
                         continue
                     seen.add(value)
                     nxt.append((value, child, chain + (value,), offsets + (offset,)))
-            if found:
+            if found and not keep_going:
                 return found
             frontier = nxt
             print("  [walker] depth %d: %d nodes to expand" % (depth + 1, len(frontier)))
@@ -408,6 +415,10 @@ def main():
                         help="skip the module scan and use this RVA")
     parser.add_argument("--verify", default=None,
                         help="routes to check, as RVA:off:off (comma-separated)")
+    parser.add_argument("--keep-going", action="store_true",
+                        help="collect routes at every depth, not just the first")
+    parser.add_argument("--save", default=None,
+                        help="write the routes found to this file")
     parser.add_argument("--goal", default="pawn_addr",
                         help="which address from the target file to search for")
     parser.add_argument("--anatomy", action="store_true",
@@ -488,7 +499,8 @@ def main():
     started = time.time()
     goal = address_of(values, args.goal) or pawn
     print("searching for %s = 0x%X" % (args.goal, goal))
-    routes = walker.search([(world, "object")], goal, max_depth=args.max_depth)
+    routes = walker.search([(world, "object")], goal, max_depth=args.max_depth,
+                           keep_going=args.keep_going)
     print("search took %.1fs, %d route(s)" % (time.time() - started, len(routes)))
     if not routes:
         print("no route from the world to the pawn within depth %d" % args.max_depth)
@@ -496,11 +508,17 @@ def main():
 
     print("")
     print("routes (verify each by re-running after a restart):")
-    for offsets in routes[:40]:
+    for offsets in routes[:60]:
         for rva in roots_rva[:4]:
             landed = walk(process, base, rva, offsets)
             mark = "OK " if landed == goal else "   "
             print("  %s%s" % (mark, describe(base, rva, offsets)))
+    if args.save:
+        with open(args.save, "w") as handle:
+            for offsets in routes:
+                handle.write(":".join("%X" % off for off in offsets) + "\n")
+        print("wrote %d route(s) to %s" % (len(routes), args.save))
+
     print("")
     print("re-check one with:  py -3 tools/ptrscan.py --verify %X:%s"
           % (roots_rva[0], ":".join("%X" % o for o in routes[0])))
