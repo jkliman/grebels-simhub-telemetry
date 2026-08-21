@@ -68,6 +68,22 @@ places `MozaPlugin.dll` in SimHub. Specifics worth knowing:
 * Your previous `MozaPlugin.dll` is kept as `MozaPlugin.dll.bak`.
 * SimHub will ask you to enable the plugin the next time it starts.
 
+**If AZOM doesn't appear**, the installer will not have told you why — a failed
+AZOM step is deliberately not allowed to sink the whole install, which means it
+fails quietly. Every run is logged to `%TEMP%\grsetup.log`, and this reports
+what actually landed:
+
+```powershell
+& "C:\Program Files (x86)\G-Rebels Telemetry\grsetup.exe" --check
+```
+
+The usual answer is that SimHub was open: it holds `MozaPlugin.dll` and the
+install refuses rather than half-replacing it. Close SimHub and re-run:
+
+```powershell
+& "C:\Program Files (x86)\G-Rebels Telemetry\grsetup.exe" --azom --simhub "C:\Program Files (x86)\SimHub"
+```
+
 AZOM is GPL-3.0 and this project is MIT, so its binary is **never bundled**. The
 installer fetches it from upstream, which leaves you obtaining it from the
 authors and us merely putting it in place.
