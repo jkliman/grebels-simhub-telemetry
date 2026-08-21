@@ -20,24 +20,48 @@ import struct
 import threading
 import time
 
-from . import calibrate, dr2
+from . import calibrate, dr2, simdef
 from .memory import Process, ProcessNotRunning
 
 GAME_PROCESS = "G_Rebels-Win64-Shipping.exe"
 GRAVITY = 9.80665
 TARGET_FILENAME = "gr_target.txt"
+FIRE_IMPULSE_DECAY_S = 0.08
+GAMEPLAY_POLL_HZ = 200.0
+
+# Unreal property kind -> (struct code, byte width). BoolProperty is read as a
+# single byte: UE stores non-bitfield bools one per byte, and every bool we ask
+# for sits at its own offset in the dump, so a plain non-zero test is safe.
+PROPERTY_KINDS = {
+    "DoubleProperty": ("<d", 8),
+    "FloatProperty": ("<f", 4),
+    "IntProperty": ("<i", 4),
+    "BoolProperty": ("<B", 1),
+    "ByteProperty": ("<B", 1),
+}
 
 
 # ------------------------------------------------------------ target file --
 def read_target_file(path):
     """Parse the key=value snapshot published by the UE4SS mod."""
     data = {}
+    fields = {}
     with open(path) as handle:
         for line in handle:
             if "=" not in line:
                 continue
             key, value = line.strip().split("=", 1)
-            data[key] = value
+            if key == "field":
+                # "offset,Kind,Name" -- Name last because Blueprint names may
+                # contain spaces ("Force F Primary Fire") and question marks.
+                parts = value.split(",", 2)
+                if len(parts) == 3 and parts[1] in PROPERTY_KINDS:
+                    try:
+                        fields[parts[2]] = (int(parts[0]), parts[1])
+                    except ValueError:
+                        pass
+            else:
+                data[key] = value
 
     def triple(name):
         raw = data.get(name)
@@ -68,6 +92,7 @@ def read_target_file(path):
         "loc": triple("loc"),
         "rot": triple("rot"),
         "vel": triple("vel"),
+        "fields": fields,
     }
 
 
@@ -96,6 +121,11 @@ class Status:
         self.game_update_hz = 0.0
         self.offsets = {}
         self.destination = ""
+        self.fields_resolved = 0
+        self.rounds_fired_total = 0
+        self.ammo = 0.0
+        self.heat = 0.0
+        self.output_mode = ""
 
     def update(self, **fields):
         with self._lock:
@@ -185,6 +215,17 @@ class Bridge:
         self._last_raw_position = None
         self._last_change_wall = 0.0
         self._threads = []
+        self._pawn = None
+        self._fields = {}
+        self._gameplay = {}
+        self._gameplay_span = None      # (base_offset, length) for one bulk read
+        self._next_gameplay_read = 0.0
+        self._last_ammo = None
+        self._last_missiles = None
+        self._rounds_pending = 0.0
+        self._missiles_pending = 0.0
+        self._last_shot_at = -99.0
+        self._in_menu = False
 
     # -- lifecycle ----------------------------------------------------------
     def start(self):
@@ -254,7 +295,9 @@ class Bridge:
         self._offsets = offsets
         self._root = target["root_addr"]
         self._world = target["world_addr"]
+        self._pawn = target["pawn_addr"]
         self._craft = target["pawn"].split(" ")[0]
+        self._set_fields(target["fields"])
         with self._lock:
             self._samples.clear()
         self.status.update(state=Status.STREAMING, craft=self._craft,
@@ -270,12 +313,94 @@ class Bridge:
         root = target["root_addr"]
         if root and root != self._root:
             self._root = root
+            self._pawn = target["pawn_addr"]
             self._craft = target["pawn"].split(" ")[0]
+            self._set_fields(target["fields"])
+            self._last_ammo = None
+            self._last_missiles = None
             with self._lock:
                 self._samples.clear()
                 self.status.update(craft=self._craft)
+        elif target["fields"] and not self._fields:
+            self._set_fields(target["fields"])
         if target["world_addr"]:
             self._world = target["world_addr"]
+
+    def _set_fields(self, fields):
+        """Record resolved property offsets and plan one bulk read for them.
+
+        The properties we want are scattered across roughly 5 KB of the pawn.
+        Reading them individually would be 20-odd ReadProcessMemory calls per
+        tick; reading the whole span once and slicing locally is a single call,
+        and the values are then guaranteed to come from the same instant rather
+        than smeared across the sampling window.
+        """
+        self._fields = dict(fields or {})
+        self._in_menu = "MainMenu" in (self._craft or "")
+        if not self._fields:
+            self._gameplay_span = None
+            return
+        lowest = min(offset for offset, _ in self._fields.values())
+        highest = max(offset + PROPERTY_KINDS[kind][1]
+                      for offset, kind in self._fields.values())
+        self._gameplay_span = (lowest, highest - lowest)
+        self.status.update(fields_resolved=len(self._fields))
+
+    def _read_gameplay(self, now):
+        """Sample weapons/shields/boost, and turn ammo changes into shot events.
+
+        Shots are counted from the magazine going DOWN, never up: a reload
+        raises the count and must not read as firing. Counting differences also
+        means a burst faster than our poll rate still lands -- we see the size
+        of the drop, not just that one happened.
+        """
+        if not self._fields or not self._pawn or self._gameplay_span is None:
+            return
+        if now < self._next_gameplay_read:
+            return
+        self._next_gameplay_read = now + 1.0 / GAMEPLAY_POLL_HZ
+
+        base, length = self._gameplay_span
+        block = self._process.read(self._pawn + base, length)
+        if block is None:
+            return
+
+        values = {}
+        for name, (offset, kind) in self._fields.items():
+            code, width = PROPERTY_KINDS[kind]
+            start = offset - base
+            try:
+                values[name] = struct.unpack_from(code, block, start)[0]
+            except struct.error:
+                continue
+
+        ammo = values.get("PrimaryFireMagazineStatus")
+        if ammo is not None:
+            if self._last_ammo is not None and ammo < self._last_ammo:
+                self._rounds_pending += self._last_ammo - ammo
+                self._last_shot_at = now
+            self._last_ammo = ammo
+
+        missiles = values.get("AvailableMissiles")
+        if missiles is not None:
+            if self._last_missiles is not None and missiles < self._last_missiles:
+                self._missiles_pending += self._last_missiles - missiles
+            self._last_missiles = missiles
+
+        with self._lock:
+            self._gameplay = values
+
+    def _take_weapon_events(self, now):
+        """Consume pending shot counts and shape them into a decaying impulse."""
+        with self._lock:
+            rounds = self._rounds_pending
+            missiles = self._missiles_pending
+            self._rounds_pending = 0.0
+            self._missiles_pending = 0.0
+            gameplay = dict(self._gameplay)
+        elapsed = now - self._last_shot_at
+        impulse = max(0.0, 1.0 - elapsed / FIRE_IMPULSE_DECAY_S)
+        return rounds, missiles, impulse, gameplay
 
     # -- sampler ------------------------------------------------------------
     def _sampler_loop(self):
@@ -306,6 +431,7 @@ class Bridge:
 
             if self._read_once(now):
                 updates += 1
+            self._read_gameplay(now)
 
             if now - rate_window_start >= 1.0:
                 self.status.update(game_update_hz=updates / (now - rate_window_start))
@@ -352,7 +478,8 @@ class Bridge:
         sample = (game_time,
                   (y / 100.0, z / 100.0, x / 100.0),        # cm -> m, packet axes
                   dr2.unreal_to_packet_space(forward_ue),
-                  dr2.unreal_to_packet_space(right_ue))
+                  dr2.unreal_to_packet_space(right_ue),
+                  (pitch, yaw, roll))                       # raw, for SimHub native
         with self._lock:
             self._samples.append(sample)
         return True
@@ -365,14 +492,14 @@ class Bridge:
                 return None
             samples = list(self._samples)
 
-        game_time, position, nose, right = samples[-1]
+        game_time, position, nose, right, rotation = samples[-1]
 
         if time.perf_counter() - self._last_change_wall > self.config.stale_after_s:
             # Game paused or in a menu. Settle the platform rather than letting
             # the last velocity coast on forever.
             return dict(time=game_time, position=position, velocity=(0.0,) * 3,
                         acceleration=(0.0,) * 3, nose=nose, right=right,
-                        speed=0.0, stale=True)
+                        rotation=rotation, speed=0.0, stale=True)
 
         window = [(s[0], s[1]) for s in samples
                   if game_time - s[0] <= self.config.fit_window_s]
@@ -388,19 +515,64 @@ class Bridge:
 
         return dict(time=game_time, position=position,
                     velocity=tuple(velocity), acceleration=tuple(acceleration),
-                    nose=nose, right=right,
+                    nose=nose, right=right, rotation=rotation,
                     speed=dr2.magnitude(velocity), stale=False)
 
     # -- sender -------------------------------------------------------------
+    def _gameplay_fields(self, gameplay, rounds, missiles, impulse):
+        """Gameplay properties mapped onto the .simdef field names."""
+        def value(name, default=0.0):
+            got = gameplay.get(name)
+            return default if got is None else got
+
+        heat_max = value("MaxHeatPrimary")
+        heat = value("TotalHeatPrimary") / heat_max if heat_max else 0.0
+
+        return {
+            "rounds_fired": rounds,
+            "fire_impulse": impulse,
+            "ammo_primary": value("PrimaryFireMagazineStatus"),
+            "ammo_max": value("PrimaryFireMagazineSize"),
+            "heat_primary": max(0.0, min(1.0, heat)),
+            "is_overheated": 1 if value("isOverheatedPrimary") else 0,
+            "shoot_left": 1 if value("ShootLeft") else 0,
+            "missiles_fired": missiles,
+            "missiles_available": value("AvailableMissiles"),
+            "missile_warning": 1 if value("MissileNotificationActive") else 0,
+            "health": value("Health"),
+            "shield": value("ShieldHealthCurrent"),
+            "shield_max": value("ShieldHealthMax"),
+            "boost_axis": value("BoostAxis"),
+            "boost_active": 1 if value("EngineBoosterIsActive") else 0,
+            "boost_time_pct": value("EngineBoostTimePercentage"),
+            "landing_gear": 1 if value("LandingGearActive") else 0,
+            "is_landing": 1 if value("isLanding") else 0,
+        }
+
     def _sender_loop(self):
         sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        destination = (self.config.host, self.config.port)
-        self.status.update(destination="%s:%d" % destination)
+        mode = self.config.output_mode
+        send_dr2 = mode in ("dr2", "both")
+        send_native = mode in ("simdef", "both")
+
+        dr2_destination = (self.config.host, self.config.port)
+        native = None
+        destinations = []
+        if send_dr2:
+            destinations.append("DR2 %s:%d" % dr2_destination)
+        if send_native:
+            native = simdef.Sender(self.config.simdef_host,
+                                   self.config.simdef_port, sock=sock)
+            destinations.append("SimHub %s:%d" % (native.host, native.port))
+        self.status.update(destination="  |  ".join(destinations),
+                           output_mode=mode)
+
         interval = 1.0 / self.config.send_rate_hz
         next_tick = time.perf_counter()
         distance = 0.0
         previous_time = None
         sent = 0
+        rounds_total = 0
         sent_at_window_start = 0
         rate_start = time.perf_counter()
 
@@ -408,35 +580,78 @@ class Bridge:
             while not self._stop.is_set():
                 state = self.derive()
                 if state is not None:
+                    wall = time.perf_counter()
+                    rounds, missiles, impulse, gameplay = \
+                        self._take_weapon_events(wall)
+                    rounds_total += int(rounds)
+
                     if state["stale"]:
                         self.status.update(state=Status.PAUSED, speed_ms=0.0,
                                            g_longitudinal=0.0, g_lateral=0.0)
-                    else:
-                        if self.status.state != Status.STREAMING:
-                            self.status.update(state=Status.STREAMING, detail="")
+                    elif self.status.state != Status.STREAMING:
+                        self.status.update(state=Status.STREAMING, detail="")
 
                     if previous_time is not None and state["time"] > previous_time:
                         distance += state["speed"] * (state["time"] - previous_time)
                     previous_time = state["time"]
 
+                    # Body-frame acceleration. "up" completes the right-handed
+                    # frame: in packet space X=right, Y=up, Z=forward, so
+                    # nose x right = up.
+                    nose, right = state["nose"], state["right"]
+                    up = dr2.cross(nose, right)
+                    acceleration = state["acceleration"]
+                    surge = dr2.dot(acceleration, nose)
+                    sway = dr2.dot(acceleration, right)
+                    heave = dr2.dot(acceleration, up)
+
                     limit = self.config.g_clamp
                     if self.config.send_g_forces:
-                        g_long = max(-limit, min(limit, dr2.dot(
-                            state["acceleration"], state["nose"]) / GRAVITY))
-                        g_lat = max(-limit, min(limit, dr2.dot(
-                            state["acceleration"], state["right"]) / GRAVITY))
+                        clamp = lambda v: max(-limit, min(limit, v / GRAVITY))
+                        g_long, g_lat = clamp(surge), clamp(sway)
                     else:
                         g_long = g_lat = 0.0
 
-                    sock.sendto(dr2.build_packet(
-                        state["time"], state["position"], state["velocity"],
-                        state["speed"], state["right"], state["nose"],
-                        g_lat, g_long, distance=distance), destination)
-                    sent += 1
+                    if send_dr2:
+                        sock.sendto(dr2.build_packet(
+                            state["time"], state["position"], state["velocity"],
+                            state["speed"], right, nose,
+                            g_lat, g_long, distance=distance), dr2_destination)
 
+                    if send_native:
+                        pitch, yaw, roll = state["rotation"]
+                        limit_ms2 = limit * GRAVITY
+                        clamp_ms2 = lambda v: max(-limit_ms2, min(limit_ms2, v))
+                        fields = simdef.motion_fields(
+                            pitch, yaw, roll, state["speed"],
+                            clamp_ms2(surge), clamp_ms2(sway), clamp_ms2(heave))
+                        position, velocity = state["position"], state["velocity"]
+                        fields.update({
+                            # int32 ms wraps after 24.8 days of game clock
+                            "time_ms": int(state["time"] * 1000.0) & 0x7FFFFFFF,
+                            "position_x": position[0],
+                            "position_y": position[1],
+                            "position_z": position[2],
+                            "velocity_x": velocity[0],
+                            "velocity_y": velocity[1],
+                            "velocity_z": velocity[2],
+                            "altitude": position[1],
+                        })
+                        fields.update(self._gameplay_fields(
+                            gameplay, rounds, missiles, impulse))
+                        native.note_position(position)
+                        native.send(fields, state["time"],
+                                    running=not self._in_menu,
+                                    paused=bool(state["stale"]))
+
+                    sent += 1
                     self.status.update(
                         speed_ms=state["speed"], altitude_m=state["position"][1],
-                        g_longitudinal=g_long, g_lateral=g_lat, packets_sent=sent)
+                        g_longitudinal=g_long, g_lateral=g_lat, packets_sent=sent,
+                        rounds_fired_total=rounds_total,
+                        ammo=gameplay.get("PrimaryFireMagazineStatus", 0.0) or 0.0,
+                        heat=self._gameplay_fields(
+                            gameplay, 0, 0, 0)["heat_primary"])
 
                 now = time.perf_counter()
                 if now - rate_start >= 1.0:

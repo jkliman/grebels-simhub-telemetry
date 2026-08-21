@@ -34,6 +34,9 @@ REQUIRED_BINARIES = ("dwmapi.dll", "UE4SS.dll")
 INSTALLED_MARKER = "grebels-telemetry-install.json"
 
 
+from . import simdef
+
+
 class InstallError(RuntimeError):
     pass
 
@@ -179,10 +182,68 @@ def install(binaries_dir, bundled_dir, progress=print):
     with open(script_path, "w", encoding="utf-8") as handle:
         handle.write(script)
 
+    install_definition(bundled_dir, progress)
+
     with open(os.path.join(binaries_dir, INSTALLED_MARKER), "w") as handle:
         json.dump({"installed_by": USER_AGENT}, handle)
 
     progress("Setup complete. Start G-Rebels and load into a flight.")
+    return True
+
+
+# ------------------------------------------------------- SimHub definition --
+def simhub_definitions_dir():
+    """Where SimHub scans for external sim definitions, or "" if unknown."""
+    local = os.environ.get("LOCALAPPDATA")
+    if not local:
+        return ""
+    return os.path.join(local, "SimHub", "ExternalSims", "Definitions")
+
+
+def install_definition(bundled_dir, progress=print):
+    """Drop the .simdef and its icon where SimHub will find them.
+
+    SimHub reads definitions from its OWN machine, so this only does anything
+    when SimHub is installed here. On a split setup -- game on one PC, rig on
+    another -- the same two files must be copied to the same folder on the
+    machine actually running SimHub. Nothing else transfers; the definition is
+    self-contained once the icon sits beside it.
+
+    Drop-in rather than a .simlink registration: both are supported, but having
+    a definition present twice under one UniqueId invites a conflict, and the
+    drop-in needs no second file to keep in sync.
+    """
+    source = os.path.join(bundled_dir, "simhub")
+    if not os.path.isdir(source):
+        return False
+
+    destination = simhub_definitions_dir()
+    if not destination or not os.path.isdir(os.path.dirname(destination)):
+        progress("SimHub not found on this PC - copy the 'simhub' folder's "
+                 "contents to %%LocalAppData%%\\SimHub\\ExternalSims\\Definitions "
+                 "on the machine running SimHub.")
+        return False
+
+    os.makedirs(destination, exist_ok=True)
+    copied = 0
+    for name in os.listdir(source):
+        origin = os.path.join(source, name)
+        if os.path.isfile(origin):
+            shutil.copy2(origin, os.path.join(destination, name))
+            copied += 1
+
+    # A stale registration pointing at an older copy would give SimHub two
+    # definitions sharing one UniqueId.
+    stale = os.path.join(os.path.dirname(destination), "Registrations",
+                         simdef.DEFINITION_UNIQUE_ID + ".simlink")
+    if os.path.exists(stale):
+        try:
+            os.remove(stale)
+        except OSError:
+            pass
+
+    progress("Installed the SimHub definition (%d files). Restart SimHub to "
+             "see G Rebels in its game list." % copied)
     return True
 
 

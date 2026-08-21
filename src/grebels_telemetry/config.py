@@ -29,8 +29,11 @@ class Config:
     """
 
     DEFAULTS = {
-        "host": "127.0.0.1",
+        "output_mode": "both",          # "dr2" | "simdef" | "both"
+        "host": "127.0.0.1",            # DiRT Rally 2.0 compatibility output
         "port": 20777,
+        "simdef_host": "127.0.0.1",     # SimHub native external-sim output
+        "simdef_port": 30777,
         "send_rate_hz": 100.0,
         "poll_hz": 1000.0,
         "fit_window_s": 0.30,

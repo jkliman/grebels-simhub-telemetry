@@ -11,6 +11,13 @@
 -- offsets by matching against a known answer, rather than relying on constants
 -- that a game patch would silently invalidate.
 --
+-- It also resolves a list of gameplay properties (weapons, shields, boost) to
+-- their byte offsets within the pawn, by name, through Unreal's reflection
+-- system. Offsets move whenever the game is patched, so resolving them by name
+-- at runtime is the difference between surviving an update and silently
+-- reading garbage. The resolution walk is cached per pawn class -- it only
+-- reruns when the class changes, not every tick.
+--
 -- Two UE 5.8 quirks worth knowing, both found the hard way: the table returned
 -- by K2_GetActorRotation enumerates its keys as Roll, Yaw, pitch (lowercase p),
 -- and the vector accessors return nil often enough that every read needs a
@@ -31,6 +38,68 @@ local function try(fn)
     if ok then return value end
     return nil
 end
+
+-- Gameplay properties the bridge reads straight out of memory. Names are exact
+-- Blueprint variable names -- note the ones with spaces and question marks,
+-- which are legal in Blueprint and appear verbatim in the reflection data.
+local WANTED = {
+    "PrimaryFireMagazineStatus",   -- rounds left: the shot counter
+    "PrimaryFireMagazineSize",
+    "PrimaryFire_pressed",
+    "PrimaryFire_Success",
+    "ShootLeft",                   -- alternating barrel
+    "TotalHeatPrimary",
+    "MaxHeatPrimary",
+    "isOverheatedPrimary",
+    "AvailableMissiles",
+    "MaxAvailableMissiles",
+    "MissileNotificationActive",   -- incoming missile warning
+    "Health",
+    "ShieldHealthCurrent",
+    "ShieldHealthMax",
+    "BoostAxis",
+    "EngineBoosterIsActive",
+    "EngineBoostTimePercentage",
+    "LandingGearActive",
+    "isLanding",
+    "Force F Primary Fire",        -- unverified: may be a tuning constant
+    "Force F Secondary Fire",
+}
+
+local wantedSet = {}
+for _, name in ipairs(WANTED) do wantedSet[name] = true end
+
+-- Cached "field=" block, rebuilt only when the pawn class changes.
+local fieldsBlock = ""
+local fieldsForClass = ""
+
+local function resolveFields(pawn)
+    local class = try(function() return pawn:GetClass() end)
+    if not class then return end
+
+    local className = try(function() return class:GetFName():ToString() end) or "?"
+    if className == fieldsForClass then return end
+
+    local found = {}
+    local ok = pcall(function()
+        class:ForEachProperty(function(prop)
+            local name = prop:GetFName():ToString()
+            if wantedSet[name] then
+                local kind = prop:GetClass():GetFName():ToString()
+                found[#found + 1] = string.format("field=%d,%s,%s\n",
+                    prop:GetOffset_Internal(), kind, name)
+            end
+        end)
+    end)
+    if not ok then return end
+
+    table.sort(found)
+    fieldsBlock = table.concat(found)
+    fieldsForClass = className
+    print(string.format("[GRTelemetry] resolved %d/%d fields on %s\n",
+        #found, #WANTED, className))
+end
+
 
 local function outputPath()
     if OUTPUT_PATH:sub(1, 2) == "@@" then
@@ -92,6 +161,8 @@ local function publish()
         if value ~= nil then timeSeconds = value end
     end
 
+    resolveFields(pawn)
+
     local name = pawn:GetFullName()
     if name ~= lastCraft then
         print(string.format("[GRTelemetry] craft: %s (world %X)\n", name, worldAddress))
@@ -109,6 +180,7 @@ local function publish()
     writeTriple(file, "loc", readVector(try(function() return pawn:K2_GetActorLocation() end)))
     writeTriple(file, "rot", readRotator(try(function() return pawn:K2_GetActorRotation() end)))
     writeTriple(file, "vel", readVector(try(function() return pawn:GetVelocity() end)))
+    file:write(fieldsBlock)
     file:close()
 end
 
