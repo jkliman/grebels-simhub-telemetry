@@ -25,11 +25,13 @@ racing game.
 ## Quick start
 
 1. Download `GRebelsTelemetry-x.y.z.msi` from
-   [Releases](../../releases) and run it. It installs the app, adds the G Rebels
-   definition to SimHub, and — if you tick the box — fetches the AZOM plugin for
-   MOZA AB9 force feedback. See [Installer](#installer) for what each step does.
-2. Launch **G-Rebels Telemetry** and press **Install / repair**. That fetches
-   UE4SS, applies the UE 5.8 compatibility files, and drops in the telemetry mod.
+   [Releases](../../releases) and run it. On a single PC it does the whole job:
+   sets up the game with UE4SS and the telemetry mod, adds the G Rebels
+   definition to SimHub, installs the app, and — if you tick the box — fetches
+   the AZOM plugin for MOZA AB9 force feedback. See
+   [Installer](#installer) for what each step does.
+2. Start G-Rebels, load into a flight, then launch **G-Rebels Telemetry** and
+   press **Start streaming**.
 3. **Restart SimHub**, then pick **G Rebels** in its games list. If SimHub is on
    this same PC the definition was installed for you in step 2; for a separate
    rig see [below](#if-simhub-is-on-a-different-machine).
@@ -43,9 +45,19 @@ that it's live while the game is fullscreen.
 
 ### Installer
 
-The MSI asks two things: where SimHub lives, and whether you want AB9 force
-feedback. Both are optional — leave them alone and you get a working telemetry
-app, nothing more.
+The MSI asks three things, on two pages, and every one of them can be turned
+off — so the same installer works whether everything is on one PC or split
+between a game machine and a SimHub rig.
+
+**Setting up the game** is on by default and is the step that makes telemetry
+work at all. It downloads UE4SS (~40 MB) and installs it beside G-Rebels along
+with the telemetry mod. Nothing in the game is modified — these sit next to it,
+and **Remove** takes them back out. Leave the folder box blank and it finds the
+game itself by parsing Steam's `libraryfolders.vdf`; Steam's registry entry is
+no help, since it records the game but leaves `InstallLocation` empty. Untick
+this on a SimHub-only rig.
+
+The other two live on the SimHub page.
 
 **The SimHub folder is only needed for AZOM.** The G Rebels definition installs
 into your user profile regardless, so it needs no path and no elevation. The box
@@ -78,7 +90,8 @@ what actually landed:
 ```
 
 The usual answer is that SimHub was open: it holds `MozaPlugin.dll` and the
-install refuses rather than half-replacing it. Close SimHub and re-run:
+install refuses rather than half-replacing it. Close SimHub and re-run — the
+same trick works for any step, so `--game` will set up UE4SS on its own too:
 
 ```powershell
 & "C:\Program Files (x86)\G-Rebels Telemetry\grsetup.exe" --azom --simhub "C:\Program Files (x86)\SimHub"

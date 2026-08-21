@@ -2,7 +2,7 @@
 
 Split out from the GUI so the installer can run it silently:
 
-    grsetup.exe --definition --simhub "C:\\Program Files (x86)\\SimHub" --azom
+    grsetup.exe --game --definition --azom --simhub "C:\\...\\SimHub"
     grsetup.exe --check          # what actually got installed, and where
 
 Exit codes: 0 success, 1 a step failed, 2 bad arguments. Failures are reported
@@ -23,7 +23,7 @@ import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "src"))
 
-from grebels_telemetry import simhub_setup
+from grebels_telemetry import config, installer, simhub_setup
 
 
 LOG_NAME = "grsetup.log"
@@ -70,6 +70,13 @@ def check(report):
     report("definition folder: %s" % definitions)
     report("  G Rebels.simdef: %s" % ("present" if os.path.isfile(simdef) else "MISSING"))
 
+    game = config.find_game_path()
+    report("G-Rebels: %s" % (game or "NOT FOUND"))
+    if game:
+        binaries = os.path.join(game, config.BINARIES_SUBPATH)
+        report("  UE4SS + mod: %s"
+               % ("installed" if installer.is_installed(binaries) else "MISSING"))
+
     simhub = simhub_setup.find_simhub_dir()
     report("SimHub: %s" % (simhub or "NOT FOUND"))
     report("SimHub running: %s" % ("yes (blocks the AZOM install)"
@@ -100,18 +107,43 @@ def main(argv=None):
                         help="download the latest stable AZOM and install it")
     parser.add_argument("--simhub", default="",
                         help="SimHub install folder (required for --azom)")
+    parser.add_argument("--game", action="store_true",
+                        help="install UE4SS and the telemetry mod into G-Rebels")
+    parser.add_argument("--game-dir", default="",
+                        help="G-Rebels folder (found automatically if omitted)")
     parser.add_argument("--check", action="store_true",
                         help="report what is installed and exit")
     args = parser.parse_args(argv)
 
-    if not (args.definition or args.azom or args.check):
-        parser.error("nothing to do: pass --definition, --azom or --check")
+    if not (args.definition or args.azom or args.game or args.check):
+        parser.error("nothing to do: pass --game, --definition, --azom or --check")
 
     report = Reporter()
     failures = 0
     try:
         if args.check:
             return check(report)
+
+        if args.game:
+            # Discovery beats the registry here: Steam writes an uninstall key
+            # for the game but leaves InstallLocation empty, so the library has
+            # to be found by parsing libraryfolders.vdf, which is what
+            # find_game_path does.
+            game = args.game_dir or config.find_game_path()
+            if not config.looks_like_game_path(game):
+                report("Game setup SKIPPED: G-Rebels not found%s. Run the app "
+                       "and use Install / repair once the game is installed."
+                       % (" at " + game if game else ""))
+                failures += 1
+            else:
+                report("Setting up %s" % game)
+                try:
+                    installer.install(
+                        os.path.join(game, config.BINARIES_SUBPATH),
+                        bundled_dir(), report)
+                except Exception as exc:
+                    report("Game setup FAILED: %s" % exc)
+                    failures += 1
 
         if args.definition:
             try:

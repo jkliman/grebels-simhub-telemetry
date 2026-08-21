@@ -56,6 +56,8 @@ if ($LASTEXITCODE -ne 0) { throw "PyInstaller failed on the app" }
 & $python -m PyInstaller --noconfirm --clean --onefile --console `
     --name grsetup --paths src `
     --add-data "simhub;simhub" `
+    --add-data "mod;mod" `
+    --add-data "ue4ss-5.8;ue4ss-5.8" `
     grsetup.py
 if ($LASTEXITCODE -ne 0) { throw "PyInstaller failed on the setup helper" }
 
