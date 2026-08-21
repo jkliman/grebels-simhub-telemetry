@@ -136,7 +136,7 @@ class TelemetryApp(tk.Tk):
 
         button_row = ttk.Frame(setup)
         button_row.pack(fill="x", padx=10, pady=(0, 10))
-        self.install_button = ttk.Button(button_row, text="Install / repair",
+        self.install_button = ttk.Button(button_row, text="Install UE4SS fallback",
                                          command=self._install)
         self.install_button.pack(side="left")
         ttk.Button(button_row, text="Re-check",
@@ -169,8 +169,15 @@ class TelemetryApp(tk.Tk):
             lines.append("")
             lines.extend(installer.describe_install(binaries))
             lines.append("")
-            lines.append("Ready to stream." if installer.is_installed(binaries)
-                         else "Press Install / repair to set up UE4SS and the mod.")
+            if installer.is_installed(binaries):
+                lines.append("UE4SS is installed. It is not needed for telemetry,")
+                lines.append("and it stops the game launching in VR - press Remove")
+                lines.append("unless you are deliberately using it as a fallback.")
+            else:
+                lines.append("Nothing is installed in the game folder, which is")
+                lines.append("how it should be: the craft is found by reading the")
+                lines.append("game's memory from outside. Install the fallback only")
+                lines.append("if a game update stops telemetry working.")
         self._write_setup_text(lines)
 
     def _browse(self):
@@ -247,12 +254,6 @@ class TelemetryApp(tk.Tk):
 
         self._apply_settings()
         self.config_data.save()
-        if not installer.is_installed(self.config_data.binaries_dir):
-            if not messagebox.askyesno(
-                    APP_TITLE,
-                    "Setup looks incomplete, so the game may not publish any "
-                    "telemetry.\n\nStart anyway?"):
-                return
         self.status = Status()
         self.bridge = Bridge(self.config_data, self.status)
         self.bridge.start()

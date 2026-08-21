@@ -11,6 +11,11 @@ weapons, heat, shields and boost.
 G-Rebels appears in SimHub under **its own name and icon**, not disguised as a
 racing game.
 
+**Nothing is installed into the game.** No injected DLL, no mod, no launcher —
+the craft is found by reading the game's memory from outside. That is what lets
+telemetry run **while you fly in VR**, which an injected mod cannot do (see
+[VR](#vr)).
+
 > **Beta.** Validated against live flight on one machine and one game build.
 > Please open an issue if it misbehaves.
 
@@ -25,19 +30,15 @@ racing game.
 ## Quick start
 
 1. Download `GRebelsTelemetry-x.y.z.msi` from
-   [Releases](../../releases) and run it. On a single PC it does the whole job:
-   sets up the game with UE4SS and the telemetry mod, adds the G Rebels
-   definition to SimHub, installs the app, and — if you tick the box — fetches
-   the AZOM plugin for MOZA AB9 force feedback. See
+   [Releases](../../releases) and run it. It installs the app, adds the G Rebels
+   definition to SimHub, and — if you tick the box — fetches the AZOM plugin for
+   MOZA AB9 force feedback. The game folder is not touched. See
    [Installer](#installer) for what each step does.
-2. Start G-Rebels, load into a flight, then launch **G-Rebels Telemetry** and
-   press **Start streaming**.
-3. **Restart SimHub**, then pick **G Rebels** in its games list. If SimHub is on
-   this same PC the definition was installed for you in step 2; for a separate
+2. **Restart SimHub**, then pick **G Rebels** in its games list. For a separate
    rig see [below](#if-simhub-is-on-a-different-machine).
-4. Start G-Rebels and load into a flight.
-5. Back in the app, enter your SimHub machine's IP (or leave `127.0.0.1` if it's
-   the same PC) and press **Start streaming**.
+3. Start G-Rebels — flat or in VR — and load into a flight.
+4. Launch **G-Rebels Telemetry**, enter your SimHub machine's IP (or leave
+   `127.0.0.1` if it's the same PC) and press **Start streaming**.
 
 The window shows your craft, speed, altitude, packet rate and how fast the game
 is updating. The taskbar title tracks your speed, so you can see at a glance
@@ -45,19 +46,9 @@ that it's live while the game is fullscreen.
 
 ### Installer
 
-The MSI asks three things, on two pages, and every one of them can be turned
-off — so the same installer works whether everything is on one PC or split
-between a game machine and a SimHub rig.
-
-**Setting up the game** is on by default and is the step that makes telemetry
-work at all. It downloads UE4SS (~40 MB) and installs it beside G-Rebels along
-with the telemetry mod. Nothing in the game is modified — these sit next to it,
-and **Remove** takes them back out. Leave the folder box blank and it finds the
-game itself by parsing Steam's `libraryfolders.vdf`; Steam's registry entry is
-no help, since it records the game but leaves `InstallLocation` empty. Untick
-this on a SimHub-only rig.
-
-The other two live on the SimHub page.
+The MSI asks two things, on one page, and both can be turned off — so the same
+installer works whether everything is on one PC or split between a game machine
+and a SimHub rig. It never writes anything into the G-Rebels folder.
 
 **The SimHub folder is only needed for AZOM.** The G Rebels definition installs
 into your user profile regardless, so it needs no path and no elevation. The box
@@ -90,8 +81,7 @@ what actually landed:
 ```
 
 The usual answer is that SimHub was open: it holds `MozaPlugin.dll` and the
-install refuses rather than half-replacing it. Close SimHub and re-run — the
-same trick works for any step, so `--game` will set up UE4SS on its own too:
+install refuses rather than half-replacing it. Close SimHub and re-run:
 
 ```powershell
 & "C:\Program Files (x86)\G-Rebels Telemetry\grsetup.exe" --azom --simhub "C:\Program Files (x86)\SimHub"
@@ -138,26 +128,38 @@ on another machine — so select G Rebels by hand. Everything else is unaffected
 ```
    GAME PC                                        SIMHUB / RIG
    ┌────────────────────────────────┐             ┌────────────────────┐
-   │ G-Rebels                       │             │ SimHub             │
-   │   └ UE4SS ─ GRTelemetry mod    │  UDP 30777  │   ├ Motion plugin  │
-   │        publishes addresses     │ ──────────► │   ├ ShakeIt        │
-   │        + property offsets      │   (native)  │   └ AZOM ─► AB9    │
-   │                                │             │                    │
-   │ GRebelsTelemetry.exe           │  UDP 20777  │  G Rebels appears  │
-   │   reads memory, sends packets  │ ──────────► │  as its own game   │
+   │ G-Rebels  (flat or VR)         │             │ SimHub             │
+   │   nothing installed in it      │  UDP 30777  │   ├ Motion plugin  │
+   │                                │ ──────────► │   ├ ShakeIt        │
+   │ GRebelsTelemetry.exe           │   (native)  │   └ AZOM ─► AB9    │
+   │   walks pointers to the craft  │             │                    │
+   │   reads memory, sends packets  │  UDP 20777  │  G Rebels appears  │
+   │                                │ ──────────► │  as its own game   │
    └────────────────────────────────┘  (DR2 compat)└───────────────────┘
 ```
 
-The in-game mod does almost nothing: a few times a second it writes out the
-*addresses* of the player pawn, its root component and the UWorld. All the fast
-sampling happens outside the game via `ReadProcessMemory`, so the game pays no
+**Finding the craft.** Unreal keeps the current world in a global variable at a
+fixed offset inside the executable. From there the player's craft is two pointer
+hops away. The app reads that global, follows the hops, and has the pawn — all
+through the same read-only handle it already uses for sampling. Nothing runs
+inside the game, so there is no injected DLL to conflict with anything and no
 per-frame cost.
 
-**Offsets are discovered, not hardcoded.** The mod also publishes the transform
-values it read through Unreal's reflection system, which gives a known-answer
-key: the app scans the object for the bytes matching that value and the offset
-falls out. A game patch that shifts the layout costs a re-scan of a few hundred
-milliseconds, not a fresh reverse-engineering session.
+Three routes to the pawn are walked, not one, and they must agree. Routes that
+share their first hop pass through the same object, so they count as a single
+witness; agreement means two *independent* objects naming the same address. Any
+candidate then has to look like a craft — an Unreal vtable, a valid root
+component, a position a craft could actually be at — before it is believed, and
+a change of craft is held for one extra reading before it is accepted.
+
+This is not belt-and-braces. Watching a live death, one witness kept naming the
+craft that had just been destroyed while another briefly returned uninitialised
+memory; either one alone would have been believed. Insisting on agreement turns
+that moment into an honest gap of about a second instead of a second and a half
+of telemetry from a corpse. Measured against UE4SS over 922 samples through
+respawns and a full level reload, the two never disagreed — except for ~1.5 s
+where UE4SS's own file still named the dead craft and the pointer routes had
+already found the new one.
 
 **Samples are timestamped with the game's own simulation clock**, not wall
 clock. This turned out to matter more than anything else. Measured against a
@@ -166,6 +168,24 @@ while wall-clock intervals between those updates scatter by ±40% — the
 correlation between distance travelled and measured interval is 0.04, i.e.
 none. Dividing good distances by bad intervals produced double-digit phantom G
 in early versions.
+
+### VR
+
+An injected mod and a VR runtime both want to hook the same engine functions,
+and on this game they lose. With UE4SS loaded, launching G-Rebels in VR dies
+immediately: an access violation inside `UE4SS.dll` with nineteen Oculus modules
+in the process. The UE log gives the tell — *"Failed to add hook, detour
+installation likely failed!"*. Renaming UE4SS's loader stops the crash, which
+also stopped the telemetry, back when telemetry needed it.
+
+Reading the craft from outside removes the conflict rather than working around
+it. There is nothing in the game to collide with the headset runtime, so VR and
+telemetry simply coexist. If you previously installed UE4SS, open the app and
+press **Remove** — or rename `dwmapi.dll` in
+`G_Rebels\Binaries\Win64` — before flying in VR.
+
+Full diagnosis, and how to re-derive the route if a game update moves it,
+in [docs/VR-NOTES.md](docs/VR-NOTES.md).
 
 ### Two output formats
 
@@ -199,11 +219,12 @@ bolting unsupported games onto motion software.
 
 ### Beyond motion
 
-The mod resolves gameplay properties **by name** through Unreal's reflection
-system and publishes their offsets, so a game patch that moves them costs a
-re-scan rather than silently reading garbage. The bridge reads the whole ~5 KB
-span in a single `ReadProcessMemory`, which also guarantees the values share one
-instant instead of smearing across the sampling window.
+Twenty-three gameplay properties sit at known offsets inside the pawn. They were
+resolved **by name** through Unreal's reflection system rather than guessed —
+that is what the optional UE4SS fallback was for, and its answers are now baked
+in. The bridge reads the whole ~5 KB span in a single `ReadProcessMemory`, which
+guarantees the values share one instant instead of smearing across the sampling
+window.
 
 That gives shields, health, boost, missiles, landing gear — and firing.
 
@@ -216,12 +237,22 @@ the barrels alternate, which is an exact per-shot event — and it tells you
 `fire_impulse` envelope, so an effect can bind strength directly instead of
 doing edge detection in SimHub.
 
-### Running UE4SS on Unreal Engine 5.8
+### The UE4SS fallback
 
-G-Rebels is UE 5.8. UE4SS officially tops out at 5.7, and out of the box its
-signature scan finds most of what it needs but fails on three AOBs — and the
-scan is all-or-nothing, so it aborts. Four things make it work, all applied
-automatically by **Install / repair**:
+Everything above is how it works now. Earlier versions asked the game where its
+own craft was, using [UE4SS](https://github.com/UE4SS-RE/RE-UE4SS) and a small
+Lua mod, and that machinery is still in the code — it is how the pointer routes
+and property offsets were found in the first place, and it is how they would be
+found again if a game update moved them.
+
+It is **not installed by default**, because it is what breaks VR. The app's
+setup tab installs it on request, `grsetup.exe --ue4ss` does the same from a
+console, and the bridge only reads its output if the pointer routes fail.
+
+If you do need it: G-Rebels is UE 5.8, UE4SS officially tops out at 5.7, and out
+of the box its signature scan finds most of what it needs but fails on three
+AOBs — and the scan is all-or-nothing, so it aborts. Four things make it work,
+all applied automatically:
 
 1. **Binaries from the rolling `experimental-latest` release.** Not a CI
    artifact: UE4SS's repo expires those almost immediately — every run reports
@@ -236,6 +267,8 @@ automatically by **Install / repair**:
 4. **A GUObjectArray override.** Without it, UE4SS locks onto an adjacent
    global that reads zero objects and hangs on *"Waiting for object
    construction"* forever, with no error message.
+
+Remember to take it back out before flying in VR.
 
 Full details in [docs/BUILD-NOTES.md](docs/BUILD-NOTES.md).
 
@@ -284,9 +317,13 @@ division by zero in disguise; before this was handled it produced spikes to
 sampler now keeps one sample per tick, which is also what the fit always
 assumed it had.
 
-**Offsets are per-build.** They're re-derived on each connect, but a large
-enough engine change could defeat the scan. It falls back to known offsets and
-says so in the window.
+**The route is per-build.** The global's offset inside the executable, the two
+hops to the craft, and the gameplay property offsets are all facts about one
+build of G-Rebels. A game update can move any of them. The app will say it
+cannot find your craft rather than stream nonsense — the vouching described
+above exists precisely so a moved offset fails loudly. Recovering means
+installing the UE4SS fallback once and re-deriving the numbers; `tools/ptrscan.py`
+and `tools/compare_resolve.py` in this repo are the tools that do it.
 
 **Windows only.** It reads another process's memory through the Win32 API.
 
@@ -317,9 +354,9 @@ third-party runtime dependencies.
 ## Is this allowed?
 
 It reads memory from a single-player game you own, and never writes to it — the
-process handle is opened read-only. It does not modify game files; UE4SS and the
-mod are added alongside them and **Remove** takes them back out. There's no
-anti-cheat in G-Rebels.
+process handle is opened read-only, and asks for no more than that. By default
+it does not touch the game folder at all: nothing is copied in, nothing is
+loaded into the process. There's no anti-cheat in G-Rebels.
 
 That said, the *right* long-term answer is native telemetry from the developers,
 who have already said they plan it. [docs/DEV-REQUEST.md](docs/DEV-REQUEST.md)
@@ -331,7 +368,8 @@ unnecessary, which would be a good outcome.
 ## Credits
 
 * [UE4SS](https://github.com/UE4SS-RE/RE-UE4SS) — the scripting system that
-  makes any of this possible. Downloaded at install time, not redistributed.
+  made the reverse engineering possible, and the optional fallback. Downloaded
+  on request, not redistributed.
 * The UE4SS maintainers and the contributors to issue
   [#1379](https://github.com/UE4SS-RE/RE-UE4SS/issues/1379), whose UE 5.8
   signature and layout files are vendored in `ue4ss-5.8/` and who documented

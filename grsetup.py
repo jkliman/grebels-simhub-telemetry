@@ -2,7 +2,7 @@
 
 Split out from the GUI so the installer can run it silently:
 
-    grsetup.exe --game --definition --azom --simhub "C:\\...\\SimHub"
+    grsetup.exe --definition --azom --simhub "C:\\...\\SimHub"
     grsetup.exe --check          # what actually got installed, and where
 
 Exit codes: 0 success, 1 a step failed, 2 bad arguments. Failures are reported
@@ -74,8 +74,10 @@ def check(report):
     report("G-Rebels: %s" % (game or "NOT FOUND"))
     if game:
         binaries = os.path.join(game, config.BINARIES_SUBPATH)
-        report("  UE4SS + mod: %s"
-               % ("installed" if installer.is_installed(binaries) else "MISSING"))
+        installed = installer.is_installed(binaries)
+        report("  UE4SS fallback: %s"
+               % ("installed - remove it if you fly in VR" if installed
+                  else "not installed (correct: telemetry does not need it)"))
 
     simhub = simhub_setup.find_simhub_dir()
     report("SimHub: %s" % (simhub or "NOT FOUND"))
@@ -107,16 +109,18 @@ def main(argv=None):
                         help="download the latest stable AZOM and install it")
     parser.add_argument("--simhub", default="",
                         help="SimHub install folder (required for --azom)")
-    parser.add_argument("--game", action="store_true",
-                        help="install UE4SS and the telemetry mod into G-Rebels")
+    parser.add_argument("--ue4ss", "--game", action="store_true", dest="ue4ss",
+                        help="install the optional UE4SS fallback into G-Rebels. "
+                             "Not needed for telemetry, and it prevents the game "
+                             "from launching in VR")
     parser.add_argument("--game-dir", default="",
                         help="G-Rebels folder (found automatically if omitted)")
     parser.add_argument("--check", action="store_true",
                         help="report what is installed and exit")
     args = parser.parse_args(argv)
 
-    if not (args.definition or args.azom or args.game or args.check):
-        parser.error("nothing to do: pass --game, --definition, --azom or --check")
+    if not (args.definition or args.azom or args.ue4ss or args.check):
+        parser.error("nothing to do: pass --definition, --azom, --ue4ss or --check")
 
     report = Reporter()
     failures = 0
@@ -124,7 +128,7 @@ def main(argv=None):
         if args.check:
             return check(report)
 
-        if args.game:
+        if args.ue4ss:
             # Discovery beats the registry here: Steam writes an uninstall key
             # for the game but leaves InstallLocation empty, so the library has
             # to be found by parsing libraryfolders.vdf, which is what

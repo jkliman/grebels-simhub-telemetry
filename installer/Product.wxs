@@ -63,8 +63,6 @@
          telemetry work at all. grsetup finds the game itself by parsing Steam's
          libraryfolders.vdf — the registry is no use, because Steam writes an
          uninstall key for the game but leaves InstallLocation empty. -->
-    <Property Id="INSTALLGAME" Value="1" />
-    <Property Id="GAMEDIR" Secure="yes" />
 
     <Directory Id="TARGETDIR" Name="SourceDir">
       <Directory Id="ProgramFilesFolder">
@@ -109,12 +107,6 @@
     </Feature>
 
     <!-- ============================ custom actions ==================== -->
-    <CustomAction Id="SetGameCmd" Property="RunGame"
-                  Value="&quot;[INSTALLFOLDER]grsetup.exe&quot; --game --game-dir &quot;[GAMEDIR]&quot;" />
-    <CustomAction Id="RunGame"
-                  BinaryKey="WixCA" DllEntry="WixQuietExec"
-                  Execute="deferred" Impersonate="no" Return="ignore" />
-
     <CustomAction Id="SetDefinitionCmd" Property="RunDefinition"
                   Value="&quot;[INSTALLFOLDER]grsetup.exe&quot; --definition" />
     <CustomAction Id="RunDefinition"
@@ -128,16 +120,10 @@
                   Execute="deferred" Impersonate="no" Return="ignore" />
 
     <InstallExecuteSequence>
-      <Custom Action="SetGameCmd" After="CostFinalize">
-        NOT Installed AND INSTALLGAME = "1"
-      </Custom>
-      <Custom Action="RunGame" After="InstallFiles">
-        NOT Installed AND INSTALLGAME = "1"
-      </Custom>
       <Custom Action="SetDefinitionCmd" After="CostFinalize">
         NOT Installed AND INSTALLDEFINITION = "1"
       </Custom>
-      <Custom Action="RunDefinition" After="RunGame">
+      <Custom Action="RunDefinition" After="InstallFiles">
         NOT Installed AND INSTALLDEFINITION = "1"
       </Custom>
       <Custom Action="SetAzomCmd" After="CostFinalize">
@@ -153,53 +139,6 @@
     <UIRef Id="WixUI_ErrorProgressText" />
 
     <UI Id="GRebelsUI">
-      <Dialog Id="GameDlg" Width="370" Height="270" Title="[ProductName] Setup">
-        <Control Id="Title" Type="Text" X="15" Y="6" Width="200" Height="15"
-                 Transparent="yes" NoPrefix="yes"
-                 Text="{\WixUI_Font_Title}G-Rebels" />
-        <Control Id="Description" Type="Text" X="25" Y="23" Width="330" Height="20"
-                 Transparent="yes" NoPrefix="yes"
-                 Text="Set up the game so it can report flight data." />
-        <Control Id="BannerBitmap" Type="Bitmap" X="0" Y="0" Width="370" Height="44"
-                 TabSkip="no" Text="WixUI_Bmp_Banner" />
-        <Control Id="BannerLine" Type="Line" X="0" Y="44" Width="370" Height="0" />
-        <Control Id="BottomLine" Type="Line" X="0" Y="234" Width="370" Height="0" />
-
-        <Control Id="GameCheck" Type="CheckBox" X="20" Y="60" Width="330" Height="18"
-                 Property="INSTALLGAME" CheckBoxValue="1"
-                 Text="Set up G-Rebels for telemetry (UE4SS and the in-game mod)" />
-        <Control Id="GameNote" Type="Text" X="34" Y="80" Width="316" Height="52"
-                 NoPrefix="yes"
-                 Text="Downloads UE4SS (about 40 MB) and installs it alongside the game together with the telemetry mod. Nothing in the game is modified: these are added next to it, and Remove takes them back out again. Without this step the game reports nothing." />
-
-        <Control Id="FolderLabel" Type="Text" X="20" Y="140" Width="330" Height="18"
-                 NoPrefix="yes"
-                 Text="Leave blank to find G-Rebels automatically, or point at it:" />
-        <Control Id="FolderEdit" Type="PathEdit" X="20" Y="160" Width="252" Height="18"
-                 Property="GAMEDIR" Indirect="no" />
-        <Control Id="BrowseButton" Type="PushButton" X="276" Y="159" Width="66" Height="19"
-                 Text="Br&amp;owse...">
-          <Publish Property="_BrowseProperty" Value="GAMEDIR" Order="1">1</Publish>
-          <Publish Event="SpawnDialog" Value="BrowseDlg" Order="2">1</Publish>
-        </Control>
-        <Control Id="SkipNote" Type="Text" X="20" Y="188" Width="330" Height="30"
-                 NoPrefix="yes"
-                 Text="Only needed on the PC that runs the game. On a separate SimHub rig, leave this unticked." />
-
-        <Control Id="Back" Type="PushButton" X="180" Y="243" Width="56" Height="17"
-                 Text="!(loc.WixUIBack)">
-          <Publish Event="NewDialog" Value="InstallDirDlg">1</Publish>
-        </Control>
-        <Control Id="Next" Type="PushButton" X="236" Y="243" Width="56" Height="17"
-                 Default="yes" Text="!(loc.WixUINext)">
-          <Publish Event="NewDialog" Value="SimHubDlg">1</Publish>
-        </Control>
-        <Control Id="Cancel" Type="PushButton" X="304" Y="243" Width="56" Height="17"
-                 Cancel="yes" Text="!(loc.WixUICancel)">
-          <Publish Event="SpawnDialog" Value="CancelDlg">1</Publish>
-        </Control>
-      </Dialog>
-
       <Dialog Id="SimHubDlg" Width="370" Height="270" Title="[ProductName] Setup">
         <Control Id="Title" Type="Text" X="15" Y="6" Width="200" Height="15"
                  Transparent="yes" NoPrefix="yes"
@@ -236,7 +175,7 @@
 
         <Control Id="Back" Type="PushButton" X="180" Y="243" Width="56" Height="17"
                  Text="!(loc.WixUIBack)">
-          <Publish Event="NewDialog" Value="GameDlg">1</Publish>
+          <Publish Event="NewDialog" Value="InstallDirDlg">1</Publish>
         </Control>
         <Control Id="Next" Type="PushButton" X="236" Y="243" Width="56" Height="17"
                  Default="yes" Text="!(loc.WixUINext)">
@@ -250,7 +189,7 @@
 
       <!-- splice SimHubDlg between the install-folder and confirm pages -->
       <Publish Dialog="InstallDirDlg" Control="Next" Event="NewDialog"
-               Value="GameDlg" Order="3">1</Publish>
+               Value="SimHubDlg" Order="3">1</Publish>
       <Publish Dialog="VerifyReadyDlg" Control="Back" Event="NewDialog"
                Value="SimHubDlg" Order="3">1</Publish>
     </UI>
