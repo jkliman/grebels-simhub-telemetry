@@ -1,0 +1,11 @@
+RECORDING 30s - SHOOT NOW
+packets: 2961
+
+AMMO   start 0  min 0  max 0  end 0   ammo_max 0
+ROUNDS total 0   frames with a shot 0   peak impulse 0.00
+SHOOT_LEFT toggles 18   overheated frames 816/2961
+HEAT   min 0.000  mean 0.207  max 1.000
+NO SHOTS SEEN - ammo never decreased
+
+SPEED  mean 36  max 256 km/h
+surge at clamp: 0.3%   mean surge 0.19 m/s2

@@ -1,0 +1,230 @@
+{
+  "TelemetryBehaviour": {
+    "GameFamily": 2,
+    "DefaultMaxSpeed": 250.0,
+    "HasRumbleStripsContactSurface": false,
+    "AllowGimbleLockSanitizer": false
+  },
+  "TelemetryDefinition": {
+    "LayoutMajorVersion": 1,
+    "LayoutMinorVersion": 0,
+    "ProtocolVersion": 1,
+    "Fields": [
+      {
+        "Name": "time_ms",
+        "Comment": null,
+        "BinaryType": 5,
+        "TypeName": "CustomTelemetryField"
+      },
+      {
+        "Name": "position_x",
+        "Comment": null,
+        "BinaryType": 8,
+        "TypeName": "CustomTelemetryField"
+      },
+      {
+        "Name": "position_y",
+        "Comment": null,
+        "BinaryType": 8,
+        "TypeName": "CustomTelemetryField"
+      },
+      {
+        "Name": "position_z",
+        "Comment": null,
+        "BinaryType": 8,
+        "TypeName": "CustomTelemetryField"
+      },
+      {
+        "Name": "velocity_x",
+        "Comment": null,
+        "BinaryType": 8,
+        "TypeName": "CustomTelemetryField"
+      },
+      {
+        "Name": "velocity_y",
+        "Comment": null,
+        "BinaryType": 8,
+        "TypeName": "CustomTelemetryField"
+      },
+      {
+        "Name": "velocity_z",
+        "Comment": null,
+        "BinaryType": 8,
+        "TypeName": "CustomTelemetryField"
+      },
+      {
+        "FieldType": "PitchDegrees",
+        "TypeName": "StandardField"
+      },
+      {
+        "FieldType": "YawDegrees",
+        "TypeName": "StandardField"
+      },
+      {
+        "FieldType": "RollDegrees",
+        "TypeName": "StandardField"
+      },
+      {
+        "FieldType": "SpeedKmh",
+        "TypeName": "StandardField"
+      },
+      {
+        "Name": "altitude",
+        "Comment": null,
+        "BinaryType": 8,
+        "TypeName": "CustomTelemetryField"
+      },
+      {
+        "FieldType": "LocalSurgeMs2",
+        "TypeName": "StandardField"
+      },
+      {
+        "FieldType": "LocalSwayMs2",
+        "TypeName": "StandardField"
+      },
+      {
+        "FieldType": "LocalHeaveMs2",
+        "TypeName": "StandardField"
+      },
+      {
+        "Name": "rounds_fired",
+        "Comment": null,
+        "BinaryType": 8,
+        "TypeName": "CustomTelemetryField"
+      },
+      {
+        "Name": "fire_impulse",
+        "Comment": null,
+        "BinaryType": 8,
+        "TypeName": "CustomTelemetryField"
+      },
+      {
+        "Name": "ammo_primary",
+        "Comment": null,
+        "BinaryType": 8,
+        "TypeName": "CustomTelemetryField"
+      },
+      {
+        "Name": "ammo_max",
+        "Comment": null,
+        "BinaryType": 8,
+        "TypeName": "CustomTelemetryField"
+      },
+      {
+        "Name": "heat_primary",
+        "Comment": null,
+        "BinaryType": 8,
+        "TypeName": "CustomTelemetryField"
+      },
+      {
+        "Name": "is_overheated",
+        "Comment": null,
+        "BinaryType": 5,
+        "TypeName": "CustomTelemetryField"
+      },
+      {
+        "Name": "shoot_left",
+        "Comment": null,
+        "BinaryType": 5,
+        "TypeName": "CustomTelemetryField"
+      },
+      {
+        "Name": "missiles_fired",
+        "Comment": null,
+        "BinaryType": 8,
+        "TypeName": "CustomTelemetryField"
+      },
+      {
+        "Name": "missiles_available",
+        "Comment": null,
+        "BinaryType": 8,
+        "TypeName": "CustomTelemetryField"
+      },
+      {
+        "Name": "missile_warning",
+        "Comment": null,
+        "BinaryType": 5,
+        "TypeName": "CustomTelemetryField"
+      },
+      {
+        "Name": "health",
+        "Comment": null,
+        "BinaryType": 8,
+        "TypeName": "CustomTelemetryField"
+      },
+      {
+        "Name": "shield",
+        "Comment": null,
+        "BinaryType": 8,
+        "TypeName": "CustomTelemetryField"
+      },
+      {
+        "Name": "shield_max",
+        "Comment": null,
+        "BinaryType": 8,
+        "TypeName": "CustomTelemetryField"
+      },
+      {
+        "Name": "boost_axis",
+        "Comment": null,
+        "BinaryType": 8,
+        "TypeName": "CustomTelemetryField"
+      },
+      {
+        "Name": "boost_active",
+        "Comment": null,
+        "BinaryType": 5,
+        "TypeName": "CustomTelemetryField"
+      },
+      {
+        "Name": "boost_time_pct",
+        "Comment": null,
+        "BinaryType": 8,
+        "TypeName": "CustomTelemetryField"
+      },
+      {
+        "Name": "landing_gear",
+        "Comment": null,
+        "BinaryType": 5,
+        "TypeName": "CustomTelemetryField"
+      },
+      {
+        "Name": "is_landing",
+        "Comment": null,
+        "BinaryType": 5,
+        "TypeName": "CustomTelemetryField"
+      },
+      {
+        "FieldType": "EngineRpm",
+        "TypeName": "StandardField"
+      },
+      {
+        "FieldType": "EngineMaxRpm",
+        "TypeName": "StandardField"
+      },
+      {
+        "FieldType": "Throttle",
+        "TypeName": "StandardField"
+      },
+      {
+        "FieldType": "Brake",
+        "TypeName": "StandardField"
+      },
+      {
+        "FieldType": "Gear",
+        "TypeName": "StandardField"
+      }
+    ]
+  },
+  "GameSignature": 414362790,
+  "TelemetrySignature": 1011715725,
+  "Name": "G Rebels",
+  "UniqueId": "971ee505-8741-4fe4-9dc8-9df425e07242",
+  "DefaultUDPPort": 30777,
+  "DetectionProcesses": [],
+  "SimStartCommand": null,
+  "SimStartArguments": null,
+  "UseExtractorProcess": false,
+  "ExtractorProcessCommand": "E:\\SteamLibrary\\steamapps\\common\\G-Rebels\\G_Rebels\\Binaries\\Win64\\G_Rebels-Win64-Shipping.exe",
+  "IconPath": "icon.png"
+}

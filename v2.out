@@ -1,0 +1,21 @@
+waiting for speed...
+armed at 510 km/h
+packets: 2498   clamped: 293   duplicate ticks: 439
+  SpeedKmh         min     0.00  mean   188.93  max   756.07 km/h
+  LocalSurgeMs2    min   -58.84  mean    -5.99  max    58.84 m/s2
+  LocalSwayMs2     min   -58.84  mean     4.29  max    58.84 m/s2
+  LocalHeaveMs2    min   -58.84  mean     1.41  max    58.84 m/s2
+  EngineRpm        min  1200.00  mean  2948.57  max  8000.00 rpm
+  heat_primary     min     0.00  mean     0.25  max     1.00 
+  ammo_primary     min     0.00  mean     0.00  max     0.00 
+  ammo_max         min     0.00  mean     0.00  max     0.00 
+frames at the clamp: 268/2498 (10.7%)
+
+WEAPONS
+  rounds_fired total: 0   peak fire_impulse: 0.00
+  ammo: start 0  min 0  end 0   ammo_max: 0
+  shoot_left toggled: 18 times
+  overheated frames: 841
+  no shots detected in window
+
+G CHECK  surge sd 24.72  reference sd 27.32  residual sd 17.02
