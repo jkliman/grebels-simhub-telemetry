@@ -39,7 +39,16 @@ class Config:
         "fit_window_s": 0.30,
         "stale_after_s": 0.30,
         "target_refresh_s": 0.5,
-        "g_clamp": 6.0,
+        # Acceleration shaping. These exist because a 6 g clamp on a derived,
+        # twice-differentiated signal does not protect a rig -- it manufactures
+        # a square wave between the rails. On a real flight SimHub's crash
+        # detector fired 89 times in 24 seconds, and every fire slams the
+        # platform level and back. Numbers below are chosen so that even a
+        # full-scale swing stays under SimHub's 40 m/s2 delta threshold.
+        "g_clamp": 1.5,                 # 14.7 m/s2 -- a fighter does not sustain more
+        "accel_reject_g": 4.0,          # above this the fit is noise, not physics
+        "accel_cutoff_hz": 4.0,         # one-pole low pass on each axis
+        "accel_slew_ms3": 60.0,         # max change per second, m/s2 per s
         "send_g_forces": True,
         "allow_fallback_offsets": True,
         # Find the craft by walking pointers from the executable rather than

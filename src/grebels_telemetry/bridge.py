@@ -205,6 +205,100 @@ def fit_motion(samples, axis):
     return coefficients[1], 2.0 * coefficients[2]
 
 
+class AccelerationShaper:
+    """Makes a derived acceleration safe to hand a motion platform.
+
+    Position differentiated twice is mostly noise, and clamping that noise is
+    the worst possible response: a spike that would have been a brief 12 g
+    becomes a sustained pin against the rail, and the next sample pins the
+    other way. The result is a square wave at full scale. Measured on a real
+    flight, SimHub's crash detector fired 89 times in 24 seconds and 11% of
+    reported values sat exactly on the 6 g clamp.
+
+    Three stages, in this order:
+
+    1. **Reject.** A fit above `reject` is not a manoeuvre a craft can perform,
+       so it carries no information. Holding the previous value discards it;
+       clamping would have kept its sign and magnitude and driven the rig.
+    2. **Low pass.** One pole per axis, which removes the 5-10 Hz thrash that
+       differentiation adds without touching the sustained cues that matter.
+    3. **Slew limit.** Caps how fast the output may change. This is what
+       guarantees the frame-to-frame delta stays small: a motion rig is a
+       physical object, and asking it to reverse 100 m/s2 in 50 ms is asking
+       it to break something.
+
+    Only then is the result clamped, and by then the clamp should never be
+    reached.
+    """
+
+    def __init__(self, config):
+        self.limit = max(0.0, config.g_clamp) * GRAVITY
+        self.reject = max(config.g_clamp, config.accel_reject_g) * GRAVITY
+        self.cutoff_hz = max(0.0, config.accel_cutoff_hz)
+        self.slew = max(0.0, config.accel_slew_ms3)
+        self.value = [0.0, 0.0, 0.0]
+        self.held = [0.0, 0.0, 0.0]
+        self._last_wall = None
+        self.rejected = 0
+        self.clamped = 0
+
+    def reset(self):
+        """Start from rest. Used when the craft changes, so a new flight never
+        inherits the last one's acceleration."""
+        self.value = [0.0, 0.0, 0.0]
+        self.held = [0.0, 0.0, 0.0]
+        self._last_wall = None
+
+    def shape(self, vector, now):
+        dt = 0.0 if self._last_wall is None else now - self._last_wall
+        self._last_wall = now
+        if dt <= 0.0 or dt > 0.5:
+            # First tick, or a stall long enough that filtering across it would
+            # be a lie. Let the slew limiter start from where we are.
+            dt = 0.0
+
+        if dt <= 0.0:
+            # No elapsed time means no basis for filtering and none for slewing
+            # either, so nothing may move. Passing the raw value through here
+            # would let the first tick after a reset jump straight to the
+            # clamp, which is the one moment a platform is least ready for it.
+            alpha = 0.0
+        elif self.cutoff_hz <= 0.0:
+            alpha = 1.0
+        else:
+            alpha = 1.0 - math.exp(-2.0 * math.pi * self.cutoff_hz * dt)
+
+        out = []
+        for axis in range(3):
+            raw = vector[axis]
+            if not math.isfinite(raw) or abs(raw) > self.reject:
+                self.rejected += 1
+                raw = self.held[axis]
+            else:
+                self.held[axis] = raw
+
+            filtered = self.value[axis] + alpha * (raw - self.value[axis])
+
+            if self.slew > 0.0 and dt > 0.0:
+                step = self.slew * dt
+                delta = filtered - self.value[axis]
+                if delta > step:
+                    filtered = self.value[axis] + step
+                elif delta < -step:
+                    filtered = self.value[axis] - step
+
+            if filtered > self.limit:
+                filtered = self.limit
+                self.clamped += 1
+            elif filtered < -self.limit:
+                filtered = -self.limit
+                self.clamped += 1
+
+            self.value[axis] = filtered
+            out.append(filtered)
+        return tuple(out)
+
+
 class Bridge:
     def __init__(self, config, status=None):
         self.config = config
@@ -232,6 +326,7 @@ class Bridge:
         self._missiles_pending = 0.0
         self._last_shot_at = -99.0
         self._in_menu = False
+        self._shaper = AccelerationShaper(config)
         self._resolver = None
         self._source = "mod"
         self._lost_since = None
@@ -307,6 +402,7 @@ class Bridge:
         self._pawn = target["pawn_addr"]
         self._craft = target["pawn"].split(" ")[0]
         self._set_fields(target["fields"])
+        self._shaper.reset()
         with self._lock:
             self._samples.clear()
         self.status.update(state=Status.STREAMING, craft=self._craft,
@@ -386,6 +482,7 @@ class Bridge:
             self._last_ammo = None
             self._last_missiles = None
             self._last_shoot_left = None
+            self._shaper.reset()
             with self._lock:
                 self._samples.clear()
                 self.status.update(craft=self._craft)
@@ -757,16 +854,21 @@ class Bridge:
                     nose, right = state["nose"], state["right"]
                     up = dr2.cross(nose, right)
                     acceleration = state["acceleration"]
-                    surge = dr2.dot(acceleration, nose)
-                    sway = dr2.dot(acceleration, right)
-                    heave = dr2.dot(acceleration, up)
+                    body = (dr2.dot(acceleration, nose),
+                            dr2.dot(acceleration, right),
+                            dr2.dot(acceleration, up))
 
-                    limit = self.config.g_clamp
+                    # Shaped once, in body axes, and the same numbers go to
+                    # both outputs. Turning G-forces off must silence the
+                    # motion channels on BOTH paths -- gating only the DR2
+                    # packet left the switch doing nothing about the output
+                    # that actually drives the platform.
                     if self.config.send_g_forces:
-                        clamp = lambda v: max(-limit, min(limit, v / GRAVITY))
-                        g_long, g_lat = clamp(surge), clamp(sway)
+                        surge, sway, heave = self._shaper.shape(body, wall)
                     else:
-                        g_long = g_lat = 0.0
+                        surge = sway = heave = 0.0
+                    g_long, g_lat = surge / GRAVITY, sway / GRAVITY
+                    self._clamped = self._shaper.clamped
 
                     if send_dr2:
                         sock.sendto(dr2.build_packet(
@@ -776,16 +878,9 @@ class Bridge:
 
                     if send_native:
                         pitch, yaw, roll = state["rotation"]
-                        limit_ms2 = limit * GRAVITY
-
-                        def clamp_ms2(v):
-                            if v > limit_ms2 or v < -limit_ms2:
-                                self._clamped += 1
-                                return max(-limit_ms2, min(limit_ms2, v))
-                            return v
                         fields = simdef.motion_fields(
                             pitch, yaw, roll, state["speed"],
-                            clamp_ms2(surge), clamp_ms2(sway), clamp_ms2(heave))
+                            surge, sway, heave)
                         position, velocity = state["position"], state["velocity"]
                         fields.update({
                             # int32 ms wraps after 24.8 days of game clock

@@ -300,15 +300,28 @@ Set `synth_engine` to `false` to send nothing at all on those channels.
 **G-forces are derived, not read.** `GetVelocity()` is computed rather than
 stored — a 16 KB scan of both the pawn and its root component, in float and
 double layouts, found nothing — so acceleration is fitted from position alone.
-Differentiating twice squares the jitter, and roughly 10% of frames still reach
-the 6 g clamp during fast flight. The clamp count is shown in the window rather
-than hidden.
+Differentiating twice squares the jitter, and during fast flight the raw fit
+regularly exceeds what a craft can physically do.
+
+**That noise has to be shaped, not clamped.** Clamping it was actively
+dangerous: on a real flight the output sat on the 6 g rail for 11% of samples
+and flipped between rails at about 10 Hz, SimHub's crash detector fired 89
+times in 24 seconds, and each fire slammed the platform level and back. Since
+0.3.1 the accelerations go through three stages before they leave — fits above
+`accel_reject_g` are discarded as noise rather than clamped, a one-pole filter
+at `accel_cutoff_hz` removes the thrash, and `accel_slew_ms3` caps how fast the
+output may change. With the defaults, the same rail-to-rail input leaves as a
+0.6 m/s² step, against a crash-detector threshold of 40.
+
+`g_clamp` defaults to **1.5 g**, not 6. A real 1.2 g pull still reaches the
+platform in under 200 ms.
 
 The default 0.30 s fit window recovers the true mean to within 3% of a
 long-window reference; shortening it makes the platform buzz, lengthening it
 adds cue latency. Tune `fit_window_s` in
 `%APPDATA%\GRebelsTelemetry\settings.json`, or turn **Send G-forces** off
-entirely — position and orientation are unaffected, so tilt cueing still works.
+entirely — that now silences the motion channels on both outputs, and position
+and orientation are unaffected, so tilt cueing still works.
 
 **The sim clock does not tick on every frame.** Around 22% of position updates
 arrive with the clock unchanged. Two positions sharing one timestamp is a

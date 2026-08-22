@@ -295,6 +295,78 @@ check("a folder without SimHubWPF.exe is not SimHub",
       not _ss.looks_like_simhub(os.path.dirname(os.path.abspath(__file__))))
 check("empty path is not SimHub", not _ss.looks_like_simhub(""))
 
+print("acceleration shaping")
+from grebels_telemetry.bridge import AccelerationShaper, GRAVITY as _G
+from grebels_telemetry.config import Config as _Cfg
+
+_cfg = _Cfg()
+check("clamp default is survivable", _cfg.g_clamp <= 2.0, _cfg.g_clamp)
+
+def run(sequence, rate=100.0, config=None):
+    """Push a series of body-frame vectors through the shaper at a fixed rate."""
+    shaper = AccelerationShaper(config or _Cfg())
+    dt = 1.0 / rate
+    out = []
+    for index, vector in enumerate(sequence):
+        out.append(shaper.shape(vector, index * dt))
+    return out, shaper
+
+# The failure exactly as it was logged: surge slamming between the rails at
+# about 10 Hz, which tripped SimHub's crash detector 89 times in 24 seconds.
+square = []
+for cycle in range(60):
+    for _ in range(5):
+        square.append((58.84, 0.0, 0.0))
+    for _ in range(5):
+        square.append((-25.0, 0.0, 0.0))
+shaped, shaper = run(square)
+
+biggest = max(abs(shaped[i][0] - shaped[i - 1][0]) for i in range(1, len(shaped)))
+check("a rail-to-rail square wave leaves as a small step",
+      biggest < 1.0, "%.2f m/s2 per tick" % biggest)
+
+vector_delta = max(
+    math.sqrt(sum((shaped[i][a] - shaped[i - 1][a]) ** 2 for a in range(3)))
+    for i in range(1, len(shaped)))
+check("vector delta stays far under SimHub's 40 m/s2 crash threshold",
+      vector_delta < 40.0, "%.2f" % vector_delta)
+
+peak = max(abs(v[0]) for v in shaped)
+check("output respects the clamp", peak <= _cfg.g_clamp * _G + 1e-9, "%.2f" % peak)
+check("an impossible fit is rejected, not clamped to the rail",
+      shaper.rejected > 0, shaper.rejected)
+
+# A real sustained manoeuvre must still get through, and reasonably promptly.
+steady, _ = run([(12.0, 0.0, 0.0)] * 100)
+check("the very first tick after a reset cannot jump",
+      steady[0] == (0.0, 0.0, 0.0), steady[0])
+check("a genuine 1.2 g pull arrives within a second",
+      abs(steady[-1][0] - 12.0) < 1.0, "%.2f" % steady[-1][0])
+# The rise is slew-limited at 60 m/s2 per second, so it is a straight ramp:
+# half of a 1.2 g pull in 100 ms, all of it just under 200 ms.
+check("and is half way there in 100 ms", steady[10][0] >= 5.99,
+      "%.2f" % steady[10][0])
+
+# Sign reversals must survive -- they are the cue, not the noise.
+turn, _ = run([(8.0, 0.0, 0.0)] * 60 + [(-8.0, 0.0, 0.0)] * 60)
+check("a reversal still reverses", turn[-1][0] < -6.0, "%.2f" % turn[-1][0])
+
+quiet, _ = run([(0.0, 0.0, 0.0)] * 20)
+check("silence in, silence out", all(v == (0.0, 0.0, 0.0) for v in quiet))
+
+shaper = AccelerationShaper(_Cfg())
+for index in range(50):
+    shaper.shape((14.0, 0.0, 0.0), index * 0.01)
+shaper.reset()
+check("reset starts a new craft from rest", shaper.value == [0.0, 0.0, 0.0])
+
+nan_out, _ = run([(float("nan"), 0.0, 0.0)] * 5 + [(3.0, 0.0, 0.0)] * 50)
+check("a NaN never reaches the platform",
+      all(math.isfinite(v[0]) for v in nan_out))
+
+off = _Cfg(send_g_forces=False)
+check("turning G-forces off is a real setting", off.send_g_forces is False)
+
 print("finding the craft without UE4SS")
 from grebels_telemetry import resolve as _rs
 
